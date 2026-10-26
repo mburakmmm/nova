@@ -88,7 +88,49 @@ def resolve_url(base_url: str, url_or_path: str, params: dict[str, str] | None =
     else:
         if len(base_url) == 0:
             raise InvalidUrlError("Relative URL provided without base_url: " + url_or_path)
-        combined = _join_paths(base_url, url_or_path)
+
+        # RFC 3986 §5.2 Relative Reference Resolution
+        scheme_sep: int = nox.strings.index_of(base_url, "://")
+        if scheme_sep < 0:
+            raise InvalidUrlError("Base URL missing scheme: " + base_url)
+        base_scheme: str = base_url[:scheme_sep]
+        after_scheme: str = base_url[scheme_sep + 3:]
+
+        first_slash: int = nox.strings.index_of(after_scheme, "/")
+        q_pos: int = nox.strings.index_of(after_scheme, "?")
+        authority: str = ""
+        base_path: str = "/"
+
+        if first_slash >= 0:
+            authority = after_scheme[:first_slash]
+            if q_pos >= 0 and q_pos > first_slash:
+                base_path = after_scheme[first_slash:q_pos]
+            elif q_pos < 0:
+                base_path = after_scheme[first_slash:]
+        else:
+            if q_pos >= 0:
+                authority = after_scheme[:q_pos]
+            else:
+                authority = after_scheme
+            base_path = "/"
+
+        if nox.strings.starts_with(url_or_path, "/"):
+            # Absolute-path reference replaces path of base URL
+            combined = base_scheme + "://" + authority + url_or_path
+        else:
+            # Relative-path reference resolved against base_path directory
+            idx: int = len(base_path) - 1
+            rightmost_slash: int = -1
+            while idx >= 0:
+                if base_path[idx] == "/":
+                    rightmost_slash = idx
+                    break
+                idx = idx - 1
+
+            base_dir: str = "/"
+            if rightmost_slash >= 0:
+                base_dir = base_path[:rightmost_slash + 1]
+            combined = base_scheme + "://" + authority + base_dir + url_or_path
 
     # Strip fragments per RFC 7230 §5.1
     frag_idx: int = nox.strings.index_of(combined, "#")

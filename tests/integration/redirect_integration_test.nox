@@ -1,0 +1,31 @@
+# tests/integration/redirect_integration_test.nox — Real HTTP redirect execution and loop defense.
+
+import nox.test
+import client
+from client import Client
+import response
+from response import Response
+import errors
+from errors import TransportError
+
+# 1. Real HTTP redirect followed automatically to destination 200
+c: Client = Client()
+resp: Response = c.get("https://httpbin.org/redirect/1")
+nox.test.assert_eq_int(resp.status_code, 200, "redirect followed to final 200 destination")
+
+# 2. Client with max_redirects=0 does not follow redirect, returns 302 directly
+c0: Client = Client(max_redirects=0)
+resp0: Response = c0.get("https://httpbin.org/redirect/1")
+nox.test.assert_eq_int(resp0.status_code, 302, "max_redirects=0 returns 302 redirect response directly")
+
+# 3. Client enforces max_redirects bound and prevents infinite redirect loops
+c1: Client = Client(max_redirects=1)
+exceeded_caught: bool = False
+try:
+    c1.get("https://httpbin.org/redirect/2")
+except TransportError as te:
+    exceeded_caught = True
+
+nox.test.assert_true(exceeded_caught, "exceeded max_redirects raises TransportError")
+
+print("redirect_integration_test passed")

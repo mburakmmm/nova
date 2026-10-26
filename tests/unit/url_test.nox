@@ -83,6 +83,12 @@ nox.test.assert_true("https://[2001:db8::1]/v1?debug=1" in res_ipv6_ssl, "IPv6 w
 res_dotdot: str = resolve_url("https://api.example.com/v1/", "../users", None)
 nox.test.assert_eq_str(res_dotdot, "https://api.example.com/users", "RFC 3986 relative .. dot-segment resolved")
 
+res_origin_rel: str = resolve_url("https://httpbin.org/redirect/1", "/get", None)
+nox.test.assert_eq_str(res_origin_rel, "https://httpbin.org/get", "RFC 3986 origin-relative path replaces base path")
+
+res_dir_rel: str = resolve_url("https://api.example.com/v1/", "users", None)
+nox.test.assert_eq_str(res_dir_rel, "https://api.example.com/v1/users", "relative path appended to base directory")
+
 res_dots: str = resolve_url("https://api.example.com", "/a/b/./c/../../d", None)
 nox.test.assert_eq_str(res_dots, "https://api.example.com/a/d", "multiple . and .. segments normalized")
 

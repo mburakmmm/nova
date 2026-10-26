@@ -5,6 +5,29 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-10-26
+
+### Security & Protocol Hardening (Reviewer Audit v0.2.2 Fixes)
+- **Cookie Acceptance Validation (RFC 6265 §5.3 Step 5)**:
+  - Validates that the responding request-host domain-matches the cookie's `Domain` attribute during extraction.
+  - Rejects attempts by unrelated domains (e.g. `evil.example.net` setting `Domain=example.com`) or parent origins setting subdomains.
+  - Rejects public suffix / top-level domains without dots (e.g., `Domain=com`, `Domain=org`).
+- **Host-Only Cookie Isolation (RFC 6265 §5.3 Step 6)**:
+  - Added `host_only: bool` to `Cookie` model.
+  - Cookies set without an explicit `Domain` attribute are marked host-only and are strictly restricted to the exact originating host (never sent to subdomains).
+- **RFC 3986 §5.2 Relative Reference Resolution**:
+  - Rewrote URL reference resolution to strictly follow RFC 3986 §5.2.
+  - Origin-relative paths (`/get`) replace the path component of the base URL, resolving `https://httpbin.org/redirect/1` with `/get` to `https://httpbin.org/get`.
+  - Directory-relative paths (`users`) correctly append to base path directories (`https://api.example.com/v1/users`).
+- **End-to-End Real Redirect Integration Test**:
+  - Added `tests/integration/redirect_integration_test.nox` verifying live 302 -> 200 resolution, `max_redirects = 0` raw 302 preservation, and `max_redirects = 1` redirect loop defense.
+- **Retry-After Upper Bound Protection**:
+  - Capped `Retry-After` delay in `Client.send()` to `policy.max_backoff_ms` (default 30,000 ms) to prevent sleep DoS from malicious servers.
+- **Header Value RFC 7230 §3.2 Validation**:
+  - Rejects all ASCII control characters (`0x00 - 0x1F` except HTAB `0x09`) and DEL (`0x7F`) in header values.
+- **Multipart Memory Documentation**:
+  - Clarified in `multipart.nox` and documentation that current multipart file uploading operates with in-memory string buffering, pending upstream runtime binary buffer support.
+
 ## [0.2.1] - 2026-10-26
 
 ### Security & Protocol Hardening (Reviewer Audit Fixes)

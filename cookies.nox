@@ -26,6 +26,7 @@ class Cookie:
     path: str
     secure: bool
     http_only: bool
+    host_only: bool
 
     def __init__(
         self: Cookie,
@@ -34,7 +35,8 @@ class Cookie:
         domain: str = "",
         path: str = "/",
         secure: bool = False,
-        http_only: bool = False
+        http_only: bool = False,
+        host_only: bool = False
     ) -> None:
         _validate_cookie_token(name)
         _validate_cookie_token(value)
@@ -44,22 +46,31 @@ class Cookie:
         self.path = path
         self.secure = secure
         self.http_only = http_only
+        self.host_only = host_only
 
     def matches_domain(self: Cookie, target_host: str) -> bool:
         if len(self.domain) == 0:
             return True
-        c_dom: str = self.domain
+        c_dom: str = nox.strings.lower(self.domain)
         if nox.strings.starts_with(c_dom, "."):
             c_dom = c_dom[1:]
 
+        thost: str = nox.strings.lower(target_host)
+
+        # RFC 6265 §5.3 Step 6:
+        # If the cookie was set without an explicit Domain attribute, it is host-only.
+        # Host-only cookies MUST NOT match subdomains! (Only exact match)
+        if self.host_only:
+            return thost == c_dom
+
         # Exact match
-        if target_host == c_dom:
+        if thost == c_dom:
             return True
 
         # Strict dot-prefixed subdomain match (RFC 6265 §5.1.3)
         # Prevents "notexample.com" matching "example.com"
         dot_dom: str = "." + c_dom
-        return nox.strings.ends_with(target_host, dot_dom)
+        return nox.strings.ends_with(thost, dot_dom)
 
     def matches_path(self: Cookie, request_path: str) -> bool:
         if len(self.path) == 0 or self.path == "/":
@@ -108,9 +119,10 @@ class CookieJar:
         domain: str = "",
         path: str = "/",
         secure: bool = False,
-        http_only: bool = False
+        http_only: bool = False,
+        host_only: bool = False
     ) -> None:
-        c: Cookie = Cookie(name, value, domain, path, secure, http_only)
+        c: Cookie = Cookie(name, value, domain, path, secure, http_only, host_only)
         self.set_cookie(c)
 
     def get(self: CookieJar, name: str, domain: str = "", path: str = "") -> str | None:
@@ -154,6 +166,7 @@ class CookieJar:
             return
 
         target: URL = nox.url.parse(target_url)
+        request_host: str = nox.strings.lower(target.host)
         parts: list[str] = nox.strings.split(raw_cookie, ";")
         if len(parts) == 0:
             return
@@ -166,10 +179,12 @@ class CookieJar:
         name: str = nox.strings.trim(first[:eq])
         val: str = nox.strings.trim(first[eq + 1:])
 
-        cookie_domain: str = target.host
+        cookie_domain: str = request_host
         cookie_path: str = "/"
         cookie_secure: bool = False
         cookie_http_only: bool = False
+        has_explicit_domain: bool = False
+        explicit_domain: str = ""
 
         i: int = 1
         while i < len(parts):
@@ -179,7 +194,32 @@ class CookieJar:
                 dkey: str = nox.strings.lower(nox.strings.trim(p[:peq]))
                 dval: str = nox.strings.trim(p[peq + 1:])
                 if dkey == "domain":
-                    cookie_domain = dval
+                    cand: str = nox.strings.lower(dval)
+                    if nox.strings.starts_with(cand, "."):
+                        cand = cand[1:]
+                    cand = nox.strings.trim(cand)
+
+                    # Public Suffix / TLD rejection:
+                    # A domain attribute without a dot (e.g. "com", "net", "org") is a public suffix
+                    # and must be rejected per RFC 6265 §5.3.
+                    if nox.strings.index_of(cand, ".") < 0:
+                        return
+
+                    # RFC 6265 §5.3 Step 5 (Domain Acceptance Validation):
+                    # The request host must domain-match the domain attribute.
+                    # E.g. request_host "evil.example.net" cannot set Domain="example.com".
+                    # E.g. request_host "example.com" cannot set Domain="sub.example.com".
+                    matches_cand: bool = (request_host == cand)
+                    if not matches_cand:
+                        dot_cand: str = "." + cand
+                        matches_cand = nox.strings.ends_with(request_host, dot_cand)
+
+                    if not matches_cand:
+                        # Reject cookie completely
+                        return
+
+                    has_explicit_domain = True
+                    explicit_domain = cand
                 elif dkey == "path":
                     cookie_path = dval
             else:
@@ -190,7 +230,12 @@ class CookieJar:
                     cookie_http_only = True
             i = i + 1
 
-        self.set(name, val, cookie_domain, cookie_path, cookie_secure, cookie_http_only)
+        is_host_only: bool = True
+        if has_explicit_domain:
+            cookie_domain = explicit_domain
+            is_host_only = False
+
+        self.set(name, val, cookie_domain, cookie_path, cookie_secure, cookie_http_only, is_host_only)
 
     def to_cookie_header(self: CookieJar, target_url: str = "") -> str:
         if len(self.cookies) == 0:

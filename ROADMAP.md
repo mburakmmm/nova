@@ -11,7 +11,7 @@
 | **Phase 0** | Discovery, Feasibility & Stdlib Audit | ✅ **COMPLETED** | v0.1.0 | 3 audit probes |
 | **Phase 1** | Nova MVP (GET/POST, JSON, Headers, URL, Errors) | ✅ **COMPLETED** | v0.1.0 | 6 unit/integration tests |
 | **Phase 2** | Client Ergonomics (Auth, CookieJar, Retry, Forms) | ✅ **COMPLETED** | v0.1.0 | 5 unit tests |
-| **Phase 3** | Transport Expansion (Methods, Timeout, Binary, Multipart, Redirects) | 🟡 **IN PROGRESS** | v0.2.1 | 14 unit/integration tests |
+| **Phase 3** | Transport Expansion (Methods, Timeout, Binary, Multipart, Redirects) | 🟡 **IN PROGRESS** | v0.2.2 | 15 unit/integration tests |
 | **Phase 4** | Advanced Features (Streaming, Async, Pooling, Proxy) | ⏳ **PLANNED** | v0.3.0+ | Planned |
 | **Phase 5** | Stable 1.0 Release (API Freeze, Security Audit, SemVer) | ⏳ **PENDING** | v1.0.0 | Full Matrix |
 

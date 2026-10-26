@@ -1,4 +1,11 @@
 # multipart.nox — RFC 7578 compliant multipart/form-data encoder and file upload support.
+#
+# NOTE ON BINARY DATA & MEMORY LIMITATIONS:
+# In the current Nox toolchain (noxc 2.0.27), files and network payloads are buffered
+# as UTF-8 strings in memory. File uploads via file_from_path() use nox.fs.read_to_string()
+# and are intended for text, configuration, source, JSON, XML, and medium-sized payloads.
+# True zero-copy binary streaming for gigabyte-scale files requires upstream Nox runtime
+# byte buffer / chunked streaming support (tracked in NOX_LIMITATIONS.md §3 & §4).
 
 import nox.fs
 import nox.strings

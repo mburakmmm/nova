@@ -93,4 +93,18 @@ nox.test.assert_eq_str(merged.get("Accept"), "application/json", "merged dict ov
 nox.test.assert_eq_str(merged.get("X-Trace"), "12345", "merged dict adds new key")
 nox.test.assert_eq_str(merged.get("User-Agent"), "Nova/0.1.0", "untouched key preserved")
 
+# 8. Control characters in header value rejected per RFC 7230 §3.2
+lf_rejected: bool = False
+try:
+    bad_ctrl: Headers = Headers()
+    bad_ctrl.set("X-Custom", "val\nue")
+except InvalidHeaderError as e:
+    lf_rejected = True
+nox.test.assert_true(lf_rejected, "LF control character in header value rejected")
+
+# Tab (0x09) is allowed in header value per RFC 7230 §3.2
+valid_tab: Headers = Headers()
+valid_tab.set("X-Tabbed", "val\tue")
+nox.test.assert_eq_str(valid_tab.get("X-Tabbed"), "val\tue", "HTAB allowed in header value")
+
 print("headers_test passed")

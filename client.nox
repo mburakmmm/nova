@@ -137,6 +137,9 @@ class Client:
                                         delay = secs * 1000
                                 except ValueError as ve:
                                     pass
+                            # Cap delay to max_backoff_ms to prevent sleep DoS
+                            if delay > pol.max_backoff_ms:
+                                delay = pol.max_backoff_ms
                             nox.time.sleep_ms(delay)
                             continue
                     break

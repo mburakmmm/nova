@@ -154,6 +154,11 @@ Nova geliştirilirken Nox derleyicisinde (`noxc`) tespit edilen ve geliştiricil
 * **Neden:** Bellek güvenliği ve nesne referansı paylaşımını önlemek için bilinçli bir kuraldır.
 * **Mevcut Çözüm:** `headers: dict[str, str] | None = None` kullanılıp fonksiyon gövdesinde `if headers is None: headers = {}` denilmektedir. Bu yapı güvenlidir ve korunmalıdır.
 
+### D. String Literallerinde Onaltılık Kaçış Dizisi (`\xHH`) Desteği:
+* **Gözlem:** `"val\x01ue"` gibi onaltılık kaçış dizileri (`\xHH`) string ayrıştırıcıda bayt karşılığına (`0x01`) dönüştürülmemekte, düz `\`, `x`, `0`, `1` karakterleri olarak bırakılmaktadır.
+* **Mevcut Durum:** Nox string literalleri standart `\n`, `\r`, `\t`, `\"`, `\'`, `\\` dizilerini desteklemektedir.
+* **Öneri:** `\x00` - `\xFF` onaltılık kaçış dizilerinin standartlaştırılması ikili test fixture'ları ve protokol seviyesi filtre testleri için faydalı olacaktır.
+
 ---
 
 ## 7. `nox.url` Standart Kütüphanesinde IPv6 Literal Hatası

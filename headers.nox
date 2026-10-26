@@ -37,13 +37,13 @@ def validate_header_entry(name: str, value: str) -> None:
             raise InvalidHeaderError("Header name '" + name + "' contains invalid character per RFC 7230")
         i = i + 1
 
-    # Validate header value characters (rejects CR, LF, NUL)
+    # Validate header value characters (rejects all control chars except HTAB 0x09, and DEL 0x7F per RFC 7230 §3.2)
     j: int = 0
     m: int = len(value)
     while j < m:
         vb: int = nox.strings.byte_at(value, j)
-        if vb == 13 or vb == 10 or vb == 0:
-            raise InvalidHeaderError("Header value contains forbidden CR/LF/NUL characters for header: " + name)
+        if (vb < 32 and vb != 9) or vb == 127:
+            raise InvalidHeaderError("Header value contains forbidden control character for header: " + name)
         j = j + 1
 
 class Headers:
