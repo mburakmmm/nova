@@ -1,4 +1,4 @@
-# url.nox — Safe URL resolution, validation, query encoding, and credential protection.
+# url.nox — Safe URL resolution, validation, RFC 3986 path normalization, IPv6 support, and credential protection.
 
 import errors
 from errors import InvalidUrlError
@@ -27,6 +27,43 @@ def sanitize_url(raw_url: str) -> str:
         return prefix + user + ":***@" + host_and_rest
     return prefix + "***@" + host_and_rest
 
+def normalize_path(path: str) -> str:
+    # RFC 3986 §5.2.4: Remove Dot Segments (./ and ../)
+    if len(path) == 0:
+        return "/"
+    is_absolute: bool = nox.strings.starts_with(path, "/")
+    parts: list[str] = nox.strings.split(path, "/")
+    stack: list[str] = []
+    i: int = 0
+    while i < len(parts):
+        seg: str = parts[i]
+        if seg == "" or seg == ".":
+            i = i + 1
+            continue
+        if seg == "..":
+            if len(stack) > 0:
+                new_stack: list[str] = []
+                j: int = 0
+                while j < len(stack) - 1:
+                    new_stack.append(stack[j])
+                    j = j + 1
+                stack = new_stack
+        else:
+            stack.append(seg)
+        i = i + 1
+
+    out: str = ""
+    k: int = 0
+    while k < len(stack):
+        out = out + "/" + stack[k]
+        k = k + 1
+
+    if len(out) == 0:
+        if is_absolute:
+            return "/"
+        return ""
+    return out
+
 def _join_paths(base: str, path: str) -> str:
     if len(base) == 0:
         return path
@@ -34,11 +71,14 @@ def _join_paths(base: str, path: str) -> str:
         return base
     base_ends_slash: bool = nox.strings.ends_with(base, "/")
     path_starts_slash: bool = nox.strings.starts_with(path, "/")
+    raw_joined: str = ""
     if base_ends_slash and path_starts_slash:
-        return base + path[1:]
-    if (not base_ends_slash) and (not path_starts_slash):
-        return base + "/" + path
-    return base + path
+        raw_joined = base + path[1:]
+    elif (not base_ends_slash) and (not path_starts_slash):
+        raw_joined = base + "/" + path
+    else:
+        raw_joined = base + path
+    return raw_joined
 
 def resolve_url(base_url: str, url_or_path: str, params: dict[str, str] | None = None) -> str:
     combined: str = ""
@@ -50,11 +90,69 @@ def resolve_url(base_url: str, url_or_path: str, params: dict[str, str] | None =
             raise InvalidUrlError("Relative URL provided without base_url: " + url_or_path)
         combined = _join_paths(base_url, url_or_path)
 
-    u: URL = nox.url.parse(combined)
-    
+    # Strip fragments per RFC 7230 §5.1
+    frag_idx: int = nox.strings.index_of(combined, "#")
+    if frag_idx >= 0:
+        combined = combined[:frag_idx]
+
     # Validate scheme
-    if u.scheme != "http" and u.scheme != "https":
-        raise InvalidUrlError("Unsupported URL scheme: " + u.scheme + ". Only http and https are supported.")
+    scheme_sep: int = nox.strings.index_of(combined, "://")
+    if scheme_sep < 0:
+        raise InvalidUrlError("Missing scheme in URL: " + combined)
+    scheme: str = combined[:scheme_sep]
+    if scheme != "http" and scheme != "https":
+        raise InvalidUrlError("Unsupported URL scheme: " + scheme + ". Only http and https are supported.")
+
+    after_scheme: str = combined[scheme_sep + 3:]
+
+    # Check for IPv6 literal host: e.g. [::1]:8080/path
+    if nox.strings.starts_with(after_scheme, "["):
+        close_bracket: int = nox.strings.index_of(after_scheme, "]")
+        if close_bracket < 0:
+            raise InvalidUrlError("Malformed IPv6 literal in URL: " + combined)
+        ipv6_host: str = after_scheme[:close_bracket + 1]
+        rest: str = after_scheme[close_bracket + 1:]
+
+        port_str: str = ""
+        path_and_query: str = "/"
+        if nox.strings.starts_with(rest, ":"):
+            slash_pos: int = nox.strings.index_of(rest, "/")
+            q_pos: int = nox.strings.index_of(rest, "?")
+            boundary_pos: int = slash_pos
+            if boundary_pos < 0 or (q_pos >= 0 and q_pos < boundary_pos):
+                boundary_pos = q_pos
+
+            if boundary_pos >= 0:
+                port_str = rest[:boundary_pos]
+                path_and_query = rest[boundary_pos:]
+            else:
+                port_str = rest
+                path_and_query = "/"
+        elif nox.strings.starts_with(rest, "/"):
+            path_and_query = rest
+
+        # Extract path and query from path_and_query
+        q_idx: int = nox.strings.index_of(path_and_query, "?")
+        raw_path: str = path_and_query
+        raw_query_dict: dict[str, str] = {}
+        if q_idx >= 0:
+            raw_path = path_and_query[:q_idx]
+            q_part: str = path_and_query[q_idx + 1:]
+            raw_query_dict = nox.url.query_decode(q_part)
+
+        norm_path: str = normalize_path(raw_path)
+        if params is not None:
+            for pk in params:
+                raw_query_dict[pk] = params[pk]
+
+        query_suffix: str = ""
+        if len(raw_query_dict) > 0:
+            query_suffix = "?" + nox.url.query_encode(raw_query_dict)
+
+        return scheme + "://" + ipv6_host + port_str + norm_path + query_suffix
+
+    # Standard IPv4 / Named Host parsing
+    u: URL = nox.url.parse(combined)
 
     # Validate host
     if len(u.host) == 0:
@@ -79,12 +177,10 @@ def resolve_url(base_url: str, url_or_path: str, params: dict[str, str] | None =
     elif u.scheme == "https" and u.port != 443 and u.port > 0:
         port_part = ":" + str(u.port)
 
-    path_part: str = u.path
-    if len(path_part) == 0:
-        path_part = "/"
+    norm_path_part: str = normalize_path(u.path)
 
     query_part: str = ""
     if len(merged_query) > 0:
         query_part = "?" + nox.url.query_encode(merged_query)
 
-    return u.scheme + "://" + u.host + port_part + path_part + query_part
+    return u.scheme + "://" + u.host + port_part + norm_path_part + query_part

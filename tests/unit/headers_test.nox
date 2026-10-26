@@ -51,6 +51,31 @@ except InvalidHeaderError as e:
 
 nox.test.assert_true(empty_name_rejected, "Empty header name rejected")
 
+# 5b. RFC 7230 token validation: Space, Colon, and Slash in header name rejected
+space_name_rejected: bool = False
+try:
+    bad_h_space: Headers = Headers()
+    bad_h_space.set("Bad Header", "value")
+except InvalidHeaderError as e:
+    space_name_rejected = True
+nox.test.assert_true(space_name_rejected, "Space in header name rejected")
+
+colon_name_rejected: bool = False
+try:
+    bad_h_colon: Headers = Headers()
+    bad_h_colon.set("X-Test:Injected", "value")
+except InvalidHeaderError as e:
+    colon_name_rejected = True
+nox.test.assert_true(colon_name_rejected, "Colon in header name rejected")
+
+slash_name_rejected: bool = False
+try:
+    bad_h_slash: Headers = Headers()
+    bad_h_slash.set("Header/Name", "value")
+except InvalidHeaderError as e:
+    slash_name_rejected = True
+nox.test.assert_true(slash_name_rejected, "Slash in header name rejected")
+
 # 6. Cloning isolation
 orig: Headers = Headers()
 orig.set("Authorization", "Bearer tok1")

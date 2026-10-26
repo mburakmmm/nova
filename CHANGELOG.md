@@ -5,6 +5,28 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-26
+
+### Security & Protocol Hardening (Reviewer Audit Fixes)
+- **RFC 6265 Cookie Isolation & Management (`cookies.nox`)**:
+  - `Cookie` class with `name`, `value`, `domain`, `path`, `secure`, `http_only`.
+  - Composite key `(name, domain, path)` allowing distinct cookies with the same name across domains or paths.
+  - Subdomain dot-matching per RFC 6265 §5.1.3 (rejecting suffixes like `notexample.com` matching `example.com`).
+  - Path-matching verification per RFC 6265 §5.1.4.
+  - HTTPS-only transmission gating for `secure` cookies.
+- **RFC 7230 §3.2.6 Header Token Validation (`headers.nox`)**:
+  - Strict validation of header names: only allowed US-ASCII visible characters and RFC 7230 delimiters.
+  - Rejection of delimiters `()<>@,;:\"/[]?={}` and whitespace in header names.
+  - CRLF and NUL character injection prevention in both names and values.
+- **RFC 3986 URL Normalization & IPv6 Support (`url.nox`)**:
+  - Dot-segment path normalization (`normalize_path`) resolving `.` and `..` relative segments cleanly.
+  - Full preservation of IPv6 bracketed literal hosts (e.g., `http://[::1]:8080/api`).
+- **Client-Side Redirect Security (`client.nox`)**:
+  - Redirect loop detection and configurable `max_redirects` limit (`Client(max_redirects=5)`).
+  - Cross-origin credential defense: automatically strips `Authorization` and `Cookie` headers when following redirects across origins (`not is_same_origin(req.url, next_url)`).
+- **Retry Backoff Calculation Fix (`retry.nox`)**:
+  - Fixed initial retry delay calculation so `attempt <= 1` returns the exact `backoff_factor_ms` rather than double.
+
 ## [0.2.0] - 2026-10-26
 
 ### Added

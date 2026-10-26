@@ -6,11 +6,12 @@ from retry import RetryPolicy
 
 # 1. Exponential backoff calculation
 pol: RetryPolicy = RetryPolicy(3, 100, 1000)
-nox.test.assert_eq_int(pol.calculate_delay_ms(1), 200, "attempt 1 delay = 100 * 2^1 = 200ms")
-nox.test.assert_eq_int(pol.calculate_delay_ms(2), 400, "attempt 2 delay = 100 * 2^2 = 400ms")
-nox.test.assert_eq_int(pol.calculate_delay_ms(3), 800, "attempt 3 delay = 100 * 2^3 = 800ms")
-# Attempt 4 capped by max_backoff_ms (1000ms instead of 1600ms)
-nox.test.assert_eq_int(pol.calculate_delay_ms(4), 1000, "delay capped by max_backoff_ms")
+nox.test.assert_eq_int(pol.calculate_delay_ms(1), 100, "attempt 1 delay = 100 * 2^0 = 100ms")
+nox.test.assert_eq_int(pol.calculate_delay_ms(2), 200, "attempt 2 delay = 100 * 2^1 = 200ms")
+nox.test.assert_eq_int(pol.calculate_delay_ms(3), 400, "attempt 3 delay = 100 * 2^2 = 400ms")
+nox.test.assert_eq_int(pol.calculate_delay_ms(4), 800, "attempt 4 delay = 100 * 2^3 = 800ms")
+# Attempt 5 capped by max_backoff_ms (1000ms instead of 1600ms)
+nox.test.assert_eq_int(pol.calculate_delay_ms(5), 1000, "delay capped by max_backoff_ms")
 
 # 2. Status code classification
 nox.test.assert_true(pol.is_status_retryable(429), "429 Too Many Requests is retryable")

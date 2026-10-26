@@ -11,7 +11,7 @@
 | **Phase 0** | Discovery, Feasibility & Stdlib Audit | ✅ **COMPLETED** | v0.1.0 | 3 audit probes |
 | **Phase 1** | Nova MVP (GET/POST, JSON, Headers, URL, Errors) | ✅ **COMPLETED** | v0.1.0 | 6 unit/integration tests |
 | **Phase 2** | Client Ergonomics (Auth, CookieJar, Retry, Forms) | ✅ **COMPLETED** | v0.1.0 | 5 unit tests |
-| **Phase 3** | Transport Expansion (Methods, Timeout, Binary, Multipart) | 🟡 **CURRENT MILESTONE** | v0.2.0 | Planned |
+| **Phase 3** | Transport Expansion (Methods, Timeout, Binary, Multipart, Redirects) | 🟡 **IN PROGRESS** | v0.2.1 | 14 unit/integration tests |
 | **Phase 4** | Advanced Features (Streaming, Async, Pooling, Proxy) | ⏳ **PLANNED** | v0.3.0+ | Planned |
 | **Phase 5** | Stable 1.0 Release (API Freeze, Security Audit, SemVer) | ⏳ **PENDING** | v1.0.0 | Full Matrix |
 
@@ -79,9 +79,9 @@
 - [ ] **3.2.4. Timeout Tests**: Deterministic test using unresponsive local test socket verifying `TimeoutError`.
 
 #### 3.3. Redirect Control Policy
-- [ ] **3.3.1. Upstream Redirect Policy**: Expose redirect behavior toggle (`follow_redirects=false`, `max_redirects`).
-- [ ] **3.3.2. Nova Security Shield**: Strip `Authorization` header on cross-origin redirects.
-- [ ] **3.3.3. Redirect Tests**: Verify redirect limits and credential stripping.
+- [x] **3.3.1. Upstream Redirect Policy Audit**: Verified that Nox runtime sets `redirect_behavior = .unhandled`, yielding raw 3xx status codes for client control.
+- [x] **3.3.2. Nova Security Shield**: Configurable `max_redirects`, redirect loop detection, and automatic stripping of `Authorization` and `Cookie` headers on cross-origin redirects.
+- [x] **3.3.3. Redirect Tests**: Verified redirect limits and credential stripping (`tests/unit/redirect_test.nox`).
 
 #### 3.4. Multipart Form & File Upload
 - [x] **3.4.1. Multipart Encoder**: RFC 7578 compliant boundary generator and payload formatter in pure Nox (`multipart.nox`).

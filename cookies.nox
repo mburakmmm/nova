@@ -1,4 +1,4 @@
-# cookies.nox — Session cookie jar with per-client isolation.
+# cookies.nox — Standards-compliant cookie jar with RFC 6265 domain, path, and secure isolation.
 
 import headers
 from headers import Headers
@@ -19,66 +19,158 @@ def _validate_cookie_token(token: str) -> None:
             raise InvalidHeaderError("Semicolon forbidden in cookie name/value")
         i = i + 1
 
-class CookieJar:
-    cookies: dict[str, str]
-    domains: dict[str, str]
-    paths: dict[str, str]
+class Cookie:
+    name: str
+    value: str
+    domain: str
+    path: str
+    secure: bool
+    http_only: bool
 
-    def __init__(self: CookieJar) -> None:
-        self.cookies = {}
-        self.domains = {}
-        self.paths = {}
-
-    def set(self: CookieJar, name: str, value: str, domain: str = "", path: str = "/") -> None:
+    def __init__(
+        self: Cookie,
+        name: str,
+        value: str,
+        domain: str = "",
+        path: str = "/",
+        secure: bool = False,
+        http_only: bool = False
+    ) -> None:
         _validate_cookie_token(name)
         _validate_cookie_token(value)
-        self.cookies[name] = value
-        self.domains[name] = domain
-        self.paths[name] = path
+        self.name = name
+        self.value = value
+        self.domain = domain
+        self.path = path
+        self.secure = secure
+        self.http_only = http_only
 
-    def get(self: CookieJar, name: str) -> str | None:
-        if name in self.cookies:
-            return self.cookies[name]
+    def matches_domain(self: Cookie, target_host: str) -> bool:
+        if len(self.domain) == 0:
+            return True
+        c_dom: str = self.domain
+        if nox.strings.starts_with(c_dom, "."):
+            c_dom = c_dom[1:]
+
+        # Exact match
+        if target_host == c_dom:
+            return True
+
+        # Strict dot-prefixed subdomain match (RFC 6265 §5.1.3)
+        # Prevents "notexample.com" matching "example.com"
+        dot_dom: str = "." + c_dom
+        return nox.strings.ends_with(target_host, dot_dom)
+
+    def matches_path(self: Cookie, request_path: str) -> bool:
+        if len(self.path) == 0 or self.path == "/":
+            return True
+
+        # RFC 6265 §5.1.4 Path Matching
+        if request_path == self.path:
+            return True
+        if nox.strings.starts_with(request_path, self.path):
+            if nox.strings.ends_with(self.path, "/"):
+                return True
+            prefix_len: int = len(self.path)
+            if len(request_path) > prefix_len:
+                if request_path[prefix_len] == "/":
+                    return True
+        return False
+
+    def matches_scheme(self: Cookie, scheme: str) -> bool:
+        if self.secure:
+            return scheme == "https"
+        return True
+
+class CookieJar:
+    cookies: list[Cookie]
+
+    def __init__(self: CookieJar) -> None:
+        self.cookies = []
+
+    def set_cookie(self: CookieJar, c: Cookie) -> None:
+        # Unique identity: (name, domain, path)
+        i: int = 0
+        while i < len(self.cookies):
+            existing: Cookie = self.cookies[i]
+            if existing.name == c.name and existing.domain == c.domain and existing.path == c.path:
+                self.cookies[i] = c
+                return
+            i = i + 1
+        clist: list[Cookie] = self.cookies
+        clist.append(c)
+        self.cookies = clist
+
+    def set(
+        self: CookieJar,
+        name: str,
+        value: str,
+        domain: str = "",
+        path: str = "/",
+        secure: bool = False,
+        http_only: bool = False
+    ) -> None:
+        c: Cookie = Cookie(name, value, domain, path, secure, http_only)
+        self.set_cookie(c)
+
+    def get(self: CookieJar, name: str, domain: str = "", path: str = "") -> str | None:
+        i: int = 0
+        while i < len(self.cookies):
+            c: Cookie = self.cookies[i]
+            if c.name == name:
+                if len(domain) == 0 or c.domain == domain:
+                    if len(path) == 0 or c.path == path:
+                        return c.value
+            i = i + 1
         return None
 
-    def has(self: CookieJar, name: str) -> bool:
-        return name in self.cookies
+    def has(self: CookieJar, name: str, domain: str = "", path: str = "") -> bool:
+        return self.get(name, domain, path) is not None
 
-    def delete(self: CookieJar, name: str) -> None:
-        if name in self.cookies:
-            del self.cookies[name]
-            del self.domains[name]
-            del self.paths[name]
+    def delete(self: CookieJar, name: str, domain: str = "", path: str = "") -> None:
+        new_list: list[Cookie] = []
+        i: int = 0
+        while i < len(self.cookies):
+            c: Cookie = self.cookies[i]
+            match: bool = (c.name == name)
+            if len(domain) > 0 and c.domain != domain:
+                match = False
+            if len(path) > 0 and c.path != path:
+                match = False
+            if not match:
+                new_list.append(c)
+            i = i + 1
+        self.cookies = new_list
 
     def len(self: CookieJar) -> int:
         return len(self.cookies)
 
     def clear(self: CookieJar) -> None:
-        self.cookies = {}
-        self.domains = {}
-        self.paths = {}
+        self.cookies = []
 
     def extract_from_response(self: CookieJar, target_url: str, resp_headers: Headers) -> None:
         raw_cookie: str = resp_headers.get("Set-Cookie", "")
         if len(raw_cookie) == 0:
             return
-        
+
         target: URL = nox.url.parse(target_url)
-        # Parse first segment before ';' as name=value
         parts: list[str] = nox.strings.split(raw_cookie, ";")
         if len(parts) == 0:
             return
+
         first: str = nox.strings.trim(parts[0])
         eq: int = nox.strings.index_of(first, "=")
         if eq <= 0:
             return
+
         name: str = nox.strings.trim(first[:eq])
         val: str = nox.strings.trim(first[eq + 1:])
 
         cookie_domain: str = target.host
         cookie_path: str = "/"
+        cookie_secure: bool = False
+        cookie_http_only: bool = False
 
-        # Inspect directives like Domain= and Path=
         i: int = 1
         while i < len(parts):
             p: str = nox.strings.trim(parts[i])
@@ -90,33 +182,53 @@ class CookieJar:
                     cookie_domain = dval
                 elif dkey == "path":
                     cookie_path = dval
+            else:
+                dflag: str = nox.strings.lower(p)
+                if dflag == "secure":
+                    cookie_secure = True
+                elif dflag == "httponly":
+                    cookie_http_only = True
             i = i + 1
 
-        self.set(name, val, cookie_domain, cookie_path)
+        self.set(name, val, cookie_domain, cookie_path, cookie_secure, cookie_http_only)
 
     def to_cookie_header(self: CookieJar, target_url: str = "") -> str:
         if len(self.cookies) == 0:
             return ""
-        
+
         target_host: str = ""
+        target_path: str = "/"
+        target_scheme: str = "http"
+
         if len(target_url) > 0:
             u: URL = nox.url.parse(target_url)
             target_host = u.host
+            target_path = u.path
+            if len(target_path) == 0:
+                target_path = "/"
+            target_scheme = u.scheme
 
         out: str = ""
-        for name in self.cookies:
-            # Check domain isolation if domain specified
-            c_dom: str = self.domains[name]
-            if len(c_dom) > 0 and len(target_host) > 0:
-                if (not nox.strings.ends_with(target_host, c_dom)) and target_host != c_dom:
+        i: int = 0
+        while i < len(self.cookies):
+            c: Cookie = self.cookies[i]
+            if len(target_url) > 0:
+                if not c.matches_domain(target_host):
+                    i = i + 1
                     continue
-            
-            val: str = self.cookies[name]
-            part: str = name + "=" + val
+                if not c.matches_path(target_path):
+                    i = i + 1
+                    continue
+                if not c.matches_scheme(target_scheme):
+                    i = i + 1
+                    continue
+
+            part: str = c.name + "=" + c.value
             if len(out) == 0:
                 out = part
             else:
                 out = out + "; " + part
+            i = i + 1
         return out
 
     def apply_to_request(self: CookieJar, target_url: str, req_headers: Headers) -> None:

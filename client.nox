@@ -23,6 +23,29 @@ from multipart import MultipartEncoder, MultipartFile, file_from_path
 import errors
 from errors import RetryExhaustedError, TransportError, UnsupportedFeatureError
 import nox.strings
+import nox.url
+from nox.url import URL
+
+def is_same_origin(url1: str, url2: str) -> bool:
+    u1: URL = nox.url.parse(url1)
+    u2: URL = nox.url.parse(url2)
+    if u1.scheme != u2.scheme:
+        return False
+    if u1.host != u2.host:
+        return False
+    p1: int = u1.port
+    if p1 <= 0:
+        if u1.scheme == "https":
+            p1 = 443
+        else:
+            p1 = 80
+    p2: int = u2.port
+    if p2 <= 0:
+        if u2.scheme == "https":
+            p2 = 443
+        else:
+            p2 = 80
+    return p1 == p2
 
 class Client:
     base_url: str
@@ -32,12 +55,14 @@ class Client:
     cookies: CookieJar | None
     retry_policy: RetryPolicy | None
     raise_on_status: bool
+    max_redirects: int
     transport: TransportAdapter
 
     def __init__(
         self: Client,
         base_url: str = "",
-        raise_for_status: bool = False
+        raise_for_status: bool = False,
+        max_redirects: int = 5
     ) -> None:
         self.base_url = base_url
         self.default_headers = Headers()
@@ -48,7 +73,12 @@ class Client:
         self.cookies = None
         self.retry_policy = None
         self.raise_on_status = raise_for_status
+        self.max_redirects = max_redirects
         self.transport = TransportAdapter()
+
+    def set_max_redirects(self: Client, n: int) -> Client:
+        self.max_redirects = n
+        return self
 
     def set_header(self: Client, name: str, value: str) -> Client:
         self.default_headers.set(name, value)
@@ -75,48 +105,92 @@ class Client:
 
     def send(self: Client, req: Request) -> Response:
         pol: RetryPolicy | None = self.retry_policy
+        current_req: Request = req
+        redirect_count: int = 0
         attempt: int = 0
         last_error_msg: str = ""
 
         while True:
-            try:
-                res: Response = self.transport.execute(req)
+            res: Response | None = None
 
-                # Cookie extraction if cookie jar enabled
-                jar: CookieJar | None = self.cookies
-                if jar is not None:
-                    jar.extract_from_response(req.url, res.headers)
+            while True:
+                try:
+                    r: Response = self.transport.execute(current_req)
+                    res = r
 
-                # Check if response status should be retried
-                if pol is not None:
-                    if pol.should_retry_status(req.method, attempt, res.status_code):
-                        attempt = attempt + 1
-                        delay: int = pol.calculate_delay_ms(attempt)
-                        # Respect Retry-After header if present (AGENTS.md §13)
-                        retry_after_str: str = res.headers.get("Retry-After", "")
-                        if len(retry_after_str) > 0:
-                            try:
-                                secs: int = int(nox.strings.trim(retry_after_str))
-                                if secs > 0:
-                                    delay = secs * 1000
-                            except ValueError as ve:
-                                pass
-                        nox.time.sleep_ms(delay)
-                        continue
+                    # Cookie extraction if cookie jar enabled
+                    jar: CookieJar | None = self.cookies
+                    if jar is not None:
+                        jar.extract_from_response(current_req.url, r.headers)
+
+                    # Check if response status should be retried
+                    if pol is not None:
+                        if pol.should_retry_status(current_req.method, attempt, r.status_code):
+                            attempt = attempt + 1
+                            delay: int = pol.calculate_delay_ms(attempt)
+                            # Respect Retry-After header if present (AGENTS.md §13)
+                            retry_after_str: str = r.headers.get("Retry-After", "")
+                            if len(retry_after_str) > 0:
+                                try:
+                                    secs: int = int(nox.strings.trim(retry_after_str))
+                                    if secs > 0:
+                                        delay = secs * 1000
+                                except ValueError as ve:
+                                    pass
+                            nox.time.sleep_ms(delay)
+                            continue
+                    break
+                except TransportError as te:
+                    last_error_msg = str(te)
+                    if pol is not None:
+                        if pol.should_retry_error(current_req.method, attempt):
+                            attempt = attempt + 1
+                            delay: int = pol.calculate_delay_ms(attempt)
+                            nox.time.sleep_ms(delay)
+                            continue
+                    raise te
+
+            # Handle Redirects (301, 302, 303, 307, 308)
+            if res is not None:
+                final_res: Response = res
+                if self.max_redirects > 0 and final_res.is_redirect() and final_res.headers.has("Location"):
+                    if redirect_count >= self.max_redirects:
+                        raise TransportError("Too many redirects: exceeded maximum of " + str(self.max_redirects))
+
+                    redirect_count = redirect_count + 1
+                    loc: str = final_res.headers.get("Location")
+                    next_url: str = resolve_url(current_req.url, loc)
+
+                    same_origin: bool = is_same_origin(current_req.url, next_url)
+                    next_headers: Headers = current_req.headers.clone()
+
+                    # SECURITY CRITICAL (AGENTS.md §10 & §11):
+                    # Strip Authorization and Proxy-Authorization on cross-origin redirects
+                    if not same_origin:
+                        next_headers.delete("Authorization")
+                        next_headers.delete("Proxy-Authorization")
+
+                    # Handle 303 See Other or 301/302 POST -> GET
+                    next_method: str = current_req.method
+                    next_body: str = current_req.body
+                    if final_res.status_code == 303 or ((final_res.status_code == 301 or final_res.status_code == 302) and current_req.method == "POST"):
+                        next_method = "GET"
+                        next_body = ""
+                        next_headers.delete("Content-Type")
+
+                    # Apply cookies for new URL destination
+                    jar2: CookieJar | None = self.cookies
+                    if jar2 is not None:
+                        next_headers.delete("Cookie")
+                        jar2.apply_to_request(next_url, next_headers)
+
+                    current_req = Request(next_method, next_url, next_headers, next_body, current_req.timeout_ms)
+                    continue
 
                 if self.raise_on_status:
-                    res.raise_for_status()
+                    final_res.raise_for_status()
 
-                return res
-            except TransportError as te:
-                last_error_msg = str(te)
-                if pol is not None:
-                    if pol.should_retry_error(req.method, attempt):
-                        attempt = attempt + 1
-                        delay: int = pol.calculate_delay_ms(attempt)
-                        nox.time.sleep_ms(delay)
-                        continue
-                raise te
+                return final_res
 
         raise RetryExhaustedError(attempt, "Retries exhausted: " + last_error_msg)
 

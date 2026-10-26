@@ -9,7 +9,7 @@ from url import resolve_url, sanitize_url
 import auth
 from auth import BasicAuth, BearerAuth
 import cookies
-from cookies import CookieJar
+from cookies import CookieJar, Cookie
 import retry
 from retry import RetryPolicy
 import response

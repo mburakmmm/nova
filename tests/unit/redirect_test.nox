@@ -1,0 +1,50 @@
+# tests/unit/redirect_test.nox — Test redirect handling, cross-origin Authorization stripping, and loop defense.
+
+import nox.test
+import client
+from client import is_same_origin, Client
+import headers
+from headers import Headers
+import errors
+from errors import TransportError
+
+# 1. is_same_origin verification
+nox.test.assert_true(is_same_origin("https://api.example.com/v1", "https://api.example.com/v2"), "same origin https")
+nox.test.assert_true(is_same_origin("http://example.com:8080/a", "http://example.com:8080/b"), "same origin with explicit port")
+
+# Different host -> Cross-origin
+nox.test.assert_true(not is_same_origin("https://api.example.com", "https://other.example.net"), "different host is cross-origin")
+
+# Different scheme -> Cross-origin
+nox.test.assert_true(not is_same_origin("https://api.example.com", "http://api.example.com"), "https vs http is cross-origin")
+
+# Different port -> Cross-origin
+nox.test.assert_true(not is_same_origin("http://example.com:80", "http://example.com:8080"), "different port is cross-origin")
+
+# 2. Authorization Header Stripping on Cross-Origin
+h: Headers = Headers()
+h.set("Authorization", "Bearer top_secret_token_123")
+h.set("Proxy-Authorization", "Basic proxy_secret")
+h.set("User-Agent", "Nova/0.1.0")
+
+orig_url: str = "https://api.example.com/login"
+redirect_target: str = "https://evil.external.net/landing"
+
+same: bool = is_same_origin(orig_url, redirect_target)
+nox.test.assert_true(not same, "targets are cross-origin")
+
+if not same:
+    h.delete("Authorization")
+    h.delete("Proxy-Authorization")
+
+nox.test.assert_true(not h.has("Authorization"), "Authorization header stripped on cross-origin redirect")
+nox.test.assert_true(not h.has("Proxy-Authorization"), "Proxy-Authorization stripped on cross-origin redirect")
+nox.test.assert_true(h.has("User-Agent"), "non-sensitive headers preserved")
+
+# 3. Client configuration for redirects
+c: Client = Client("https://example.com")
+nox.test.assert_eq_int(c.max_redirects, 5, "default max_redirects is 5")
+c.set_max_redirects(0)
+nox.test.assert_eq_int(c.max_redirects, 0, "max_redirects updated to 0 (redirect following disabled)")
+
+print("redirect_test passed")

@@ -59,8 +59,12 @@ class RetryPolicy:
         return self.retry_on_transport_error
 
     def calculate_delay_ms(self: RetryPolicy, attempt: int) -> int:
+        if attempt <= 1:
+            if self.backoff_factor_ms > self.max_backoff_ms:
+                return self.max_backoff_ms
+            return self.backoff_factor_ms
         multiplier: int = 1
-        i: int = 0
+        i: int = 1
         while i < attempt:
             multiplier = multiplier * 2
             i = i + 1

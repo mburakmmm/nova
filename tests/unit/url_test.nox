@@ -72,4 +72,18 @@ safe: str = sanitize_url("https://bob:mysecretpassword@service.org/v1")
 nox.test.assert_true("mysecretpassword" not in safe, "password redacted by sanitize_url")
 nox.test.assert_true("bob:***@" in safe, "user preserved with redacted password")
 
+# 10. IPv6 bracketed address preservation (P1)
+res_ipv6: str = resolve_url("", "http://[::1]:8080/api/status", None)
+nox.test.assert_eq_str(res_ipv6, "http://[::1]:8080/api/status", "IPv6 bracketed literal preserved")
+
+res_ipv6_ssl: str = resolve_url("", "https://[2001:db8::1]/v1", {"debug": "1"})
+nox.test.assert_true("https://[2001:db8::1]/v1?debug=1" in res_ipv6_ssl, "IPv6 with HTTPS and query params preserved")
+
+# 11. RFC 3986 Path Normalization (.. and .) (P1)
+res_dotdot: str = resolve_url("https://api.example.com/v1/", "../users", None)
+nox.test.assert_eq_str(res_dotdot, "https://api.example.com/users", "RFC 3986 relative .. dot-segment resolved")
+
+res_dots: str = resolve_url("https://api.example.com", "/a/b/./c/../../d", None)
+nox.test.assert_eq_str(res_dots, "https://api.example.com/a/d", "multiple . and .. segments normalized")
+
 print("url_test passed")
