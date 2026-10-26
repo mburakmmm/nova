@@ -1,0 +1,36 @@
+# tests/unit/auth_test.nox — Test Basic & Bearer authentication, redaction, and precedence.
+
+import nox.test
+import auth
+from auth import BasicAuth, BearerAuth
+import headers
+from headers import Headers
+
+# 1. BasicAuth format
+ba: BasicAuth = BasicAuth("aladdin", "opensesame")
+h1: Headers = Headers()
+ba.apply(h1)
+# base64("aladdin:opensesame") is "YWxhZGRpbjpvcGVuc2VzYW1l"
+nox.test.assert_eq_str(h1.get("Authorization"), "Basic YWxhZGRpbjpvcGVuc2VzYW1l", "BasicAuth encodes username:password in base64")
+
+# 2. BasicAuth redaction
+nox.test.assert_eq_str(ba.redacted(), "Basic aladdin:***", "password redacted in BasicAuth repr")
+
+# 3. BearerAuth format
+bea: BearerAuth = BearerAuth("my-secret-token-xyz")
+h2: Headers = Headers()
+bea.apply(h2)
+nox.test.assert_eq_str(h2.get("Authorization"), "Bearer my-secret-token-xyz", "BearerAuth sets Authorization header")
+
+# 4. BearerAuth redaction
+red: str = bea.redacted()
+nox.test.assert_true("my-secret-token-xyz" not in red, "token redacted in BearerAuth repr")
+nox.test.assert_true("my-s" in red, "token prefix visible in redaction for identification")
+
+# 5. Caller Authorization precedence
+h3: Headers = Headers()
+h3.set("Authorization", "Custom CallerToken")
+ba.apply(h3)
+nox.test.assert_eq_str(h3.get("Authorization"), "Custom CallerToken", "caller-supplied Authorization header takes precedence")
+
+print("auth_test passed")

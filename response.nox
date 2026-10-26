@@ -1,0 +1,66 @@
+# response.nox — Rich HTTP response representation with status helpers and JSON decoding.
+
+import headers
+from headers import Headers
+import errors
+from errors import HttpStatusError, DecodeError
+import url
+from url import sanitize_url
+import nox.json
+from nox.json import JsonValue, JsonError
+
+class Response:
+    status_code: int
+    body: str
+    headers: Headers
+    url: str
+    method: str
+    elapsed_ms: int
+
+    def __init__(
+        self: Response,
+        status_code: int,
+        body: str,
+        headers: Headers,
+        url: str,
+        method: str,
+        elapsed_ms: int = 0
+    ) -> None:
+        self.status_code = status_code
+        self.body = body
+        self.headers = headers
+        self.url = url
+        self.method = method
+        self.elapsed_ms = elapsed_ms
+
+    def is_success(self: Response) -> bool:
+        return self.status_code >= 200 and self.status_code <= 299
+
+    def is_redirect(self: Response) -> bool:
+        return self.status_code >= 300 and self.status_code <= 399
+
+    def is_client_error(self: Response) -> bool:
+        return self.status_code >= 400 and self.status_code <= 499
+
+    def is_server_error(self: Response) -> bool:
+        return self.status_code >= 500 and self.status_code <= 599
+
+    def is_error(self: Response) -> bool:
+        return self.status_code >= 400
+
+    def raise_for_status(self: Response) -> None:
+        if self.is_error():
+            safe: str = sanitize_url(self.url)
+            msg: str = "HTTP " + str(self.status_code) + " error for url: " + safe
+            raise HttpStatusError(self.status_code, self.url, msg)
+
+    def json(self: Response) -> JsonValue:
+        if len(self.body) == 0:
+            raise DecodeError("Cannot parse empty response body as JSON")
+        try:
+            return nox.json.parse(self.body)
+        except JsonError as e:
+            raise DecodeError("Invalid JSON in response from " + sanitize_url(self.url) + ": " + str(e))
+
+    def text(self: Response) -> str:
+        return self.body

@@ -1,0 +1,14 @@
+# examples/post_json.nox — Sending JSON payload and inspecting response.
+
+import nova
+from nova import Response
+import nox.json
+from nox.json import JsonValue
+
+json_payload: str = "{\"name\":\"Ada Lovelace\",\"field\":\"Computing\",\"active\":true}"
+resp: Response = nova.post_json("https://httpbin.org/post", json_payload)
+
+print("POST Status:", resp.status_code)
+if resp.is_success():
+    parsed: JsonValue = resp.json()
+    print("Parsed JSON object keys count:", nox.json.object_len(parsed))

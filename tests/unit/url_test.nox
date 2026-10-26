@@ -1,0 +1,75 @@
+# tests/unit/url_test.nox — Test URL resolution, query merging, fragment removal, and security validations.
+
+import nox.test
+import url
+from url import resolve_url, sanitize_url
+import errors
+from errors import InvalidUrlError
+
+# 1. Absolute URL resolution
+res1: str = resolve_url("", "https://api.github.com/users", None)
+nox.test.assert_eq_str(res1, "https://api.github.com/users", "absolute URL preserved without base_url")
+
+# 2. Base URL + Relative path resolution (slash normalization)
+res2: str = resolve_url("https://api.github.com", "/users", None)
+nox.test.assert_eq_str(res2, "https://api.github.com/users", "base_url joined with leading slash path")
+
+res3: str = resolve_url("https://api.github.com/", "users", None)
+nox.test.assert_eq_str(res3, "https://api.github.com/users", "trailing slash on base handled")
+
+res4: str = resolve_url("https://api.github.com/", "/users", None)
+nox.test.assert_eq_str(res4, "https://api.github.com/users", "double slash normalized to single slash")
+
+# 3. Relative URL without base_url raises InvalidUrlError
+rel_rejected: bool = False
+try:
+    resolve_url("", "relative/endpoint", None)
+except InvalidUrlError as e:
+    rel_rejected = True
+
+nox.test.assert_true(rel_rejected, "relative URL without base_url rejected")
+
+# 4. Unsupported scheme rejected
+scheme_rejected: bool = False
+try:
+    resolve_url("", "file:///etc/passwd", None)
+except InvalidUrlError as e:
+    scheme_rejected = True
+
+nox.test.assert_true(scheme_rejected, "file:// scheme rejected")
+
+ftp_rejected: bool = False
+try:
+    resolve_url("", "ftp://ftp.example.com/file.txt", None)
+except InvalidUrlError as e:
+    ftp_rejected = True
+
+nox.test.assert_true(ftp_rejected, "ftp:// scheme rejected")
+
+# 5. Query parameters appended and encoded
+res_q: str = resolve_url("https://api.example.com", "/search", {"q": "hello world", "page": "2"})
+nox.test.assert_true("q=hello" in res_q or "page=2" in res_q, "query parameters encoded into URL")
+
+# 6. Existing query merged with params
+res_q2: str = resolve_url("https://api.example.com", "/search?filter=active", {"limit": "50"})
+nox.test.assert_true("filter=active" in res_q2 and "limit=50" in res_q2, "existing query parameters merged with params")
+
+# 7. Fragment stripped from request target
+res_frag: str = resolve_url("https://api.example.com", "/docs#section-3", None)
+nox.test.assert_true("#" not in res_frag, "URL fragment stripped per RFC 7230 §5.1")
+
+# 8. Embedded credentials in URL rejected
+cred_rejected: bool = False
+try:
+    resolve_url("", "https://admin:super_secret@api.internal.com/data", None)
+except InvalidUrlError as e:
+    cred_rejected = True
+
+nox.test.assert_true(cred_rejected, "embedded credentials in URL rejected for security")
+
+# 9. Sanitization helper redacts passwords
+safe: str = sanitize_url("https://bob:mysecretpassword@service.org/v1")
+nox.test.assert_true("mysecretpassword" not in safe, "password redacted by sanitize_url")
+nox.test.assert_true("bob:***@" in safe, "user preserved with redacted password")
+
+print("url_test passed")

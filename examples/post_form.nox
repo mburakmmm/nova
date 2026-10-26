@@ -1,0 +1,15 @@
+# examples/post_form.nox — Submitting URL-encoded form data.
+
+import nova
+from nova import Response
+
+form_data: dict[str, str] = {
+    "username": "ada_lovelace",
+    "grant_type": "password",
+    "scope": "read write"
+}
+
+resp: Response = nova.post_form("https://httpbin.org/post", form_data)
+
+print("Form POST Status:", resp.status_code)
+print("Response body preview:", resp.body[:150])

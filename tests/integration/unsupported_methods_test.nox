@@ -1,0 +1,41 @@
+# tests/integration/unsupported_methods_test.nox — Verifies explicit UnsupportedFeatureError on unsupported HTTP methods.
+
+import nox.test
+import nova
+from nova import Client, Response
+import errors
+from errors import UnsupportedFeatureError
+
+cli: Client = Client("https://httpbin.org")
+
+# 1. PUT is explicitly rejected
+put_rejected: bool = False
+try:
+    cli.put("/put", "some data")
+except UnsupportedFeatureError as ue:
+    put_rejected = True
+    nox.test.assert_eq_str(ue.feature, "PUT", "PUT feature reported in UnsupportedFeatureError")
+
+nox.test.assert_true(put_rejected, "PUT method raises UnsupportedFeatureError")
+
+# 2. PATCH is explicitly rejected
+patch_rejected: bool = False
+try:
+    cli.patch("/patch", "some data")
+except UnsupportedFeatureError as pe:
+    patch_rejected = True
+    nox.test.assert_eq_str(pe.feature, "PATCH", "PATCH feature reported in UnsupportedFeatureError")
+
+nox.test.assert_true(patch_rejected, "PATCH method raises UnsupportedFeatureError")
+
+# 3. DELETE is explicitly rejected
+del_rejected: bool = False
+try:
+    cli.delete("/delete")
+except UnsupportedFeatureError as de:
+    del_rejected = True
+    nox.test.assert_eq_str(de.feature, "DELETE", "DELETE feature reported in UnsupportedFeatureError")
+
+nox.test.assert_true(del_rejected, "DELETE method raises UnsupportedFeatureError")
+
+print("unsupported_methods_test passed")

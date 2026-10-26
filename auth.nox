@@ -1,0 +1,45 @@
+# auth.nox — Authentication helpers with credential redaction.
+
+import nox.base64
+import headers
+from headers import Headers
+
+class BasicAuth:
+    username: str
+    password: str
+
+    def __init__(self: BasicAuth, username: str, password: str) -> None:
+        self.username = username
+        self.password = password
+
+    def build_header(self: BasicAuth) -> str:
+        raw: str = self.username + ":" + self.password
+        return "Basic " + nox.base64.encode(raw)
+
+    def apply(self: BasicAuth, req_headers: Headers) -> None:
+        # Caller-supplied Authorization takes precedence
+        if not req_headers.has("Authorization"):
+            req_headers.set("Authorization", self.build_header())
+
+    def redacted(self: BasicAuth) -> str:
+        return "Basic " + self.username + ":***"
+
+class BearerAuth:
+    token: str
+
+    def __init__(self: BearerAuth, token: str) -> None:
+        self.token = token
+
+    def build_header(self: BearerAuth) -> str:
+        return "Bearer " + self.token
+
+    def apply(self: BearerAuth, req_headers: Headers) -> None:
+        # Caller-supplied Authorization takes precedence
+        if not req_headers.has("Authorization"):
+            req_headers.set("Authorization", self.build_header())
+
+    def redacted(self: BearerAuth) -> str:
+        n: int = len(self.token)
+        if n > 8:
+            return "Bearer " + self.token[:4] + "..." + self.token[n - 4:]
+        return "Bearer ***"

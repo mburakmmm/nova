@@ -1,0 +1,18 @@
+# examples/error_handling.nox — Robust error handling with Nova exception types.
+
+import nova
+from nova import Client, Response
+import errors
+from errors import HttpStatusError, TransportError, NovaError
+
+cli: Client = Client("https://httpbin.org")
+
+try:
+    resp: Response = cli.get("/status/404")
+    resp.raise_for_status()
+except HttpStatusError as he:
+    print("Caught HTTP status error:", he.status_code, "for URL:", he.url)
+except TransportError as te:
+    print("Caught network transport error:", te)
+except NovaError as ne:
+    print("Caught generic Nova error:", ne)

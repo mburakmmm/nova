@@ -1,0 +1,11 @@
+# examples/basic_get.nox — Minimal GET request demonstration.
+
+import nova
+from nova import Response
+
+resp: Response = nova.get("https://httpbin.org/get")
+
+print("Status:", resp.status_code)
+print("Is success:", resp.is_success())
+print("Elapsed:", resp.elapsed_ms, "ms")
+print("Body length:", len(resp.body))

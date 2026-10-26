@@ -1,0 +1,40 @@
+# tests/unit/retry_test.nox — Test retry policy, backoff calculation, and idempotency safeguards.
+
+import nox.test
+import retry
+from retry import RetryPolicy
+
+# 1. Exponential backoff calculation
+pol: RetryPolicy = RetryPolicy(3, 100, 1000)
+nox.test.assert_eq_int(pol.calculate_delay_ms(1), 200, "attempt 1 delay = 100 * 2^1 = 200ms")
+nox.test.assert_eq_int(pol.calculate_delay_ms(2), 400, "attempt 2 delay = 100 * 2^2 = 400ms")
+nox.test.assert_eq_int(pol.calculate_delay_ms(3), 800, "attempt 3 delay = 100 * 2^3 = 800ms")
+# Attempt 4 capped by max_backoff_ms (1000ms instead of 1600ms)
+nox.test.assert_eq_int(pol.calculate_delay_ms(4), 1000, "delay capped by max_backoff_ms")
+
+# 2. Status code classification
+nox.test.assert_true(pol.is_status_retryable(429), "429 Too Many Requests is retryable")
+nox.test.assert_true(pol.is_status_retryable(500), "500 Internal Server Error is retryable")
+nox.test.assert_true(pol.is_status_retryable(502), "502 Bad Gateway is retryable")
+nox.test.assert_true(pol.is_status_retryable(503), "503 Service Unavailable is retryable")
+nox.test.assert_true(pol.is_status_retryable(504), "504 Gateway Timeout is retryable")
+nox.test.assert_true(not pol.is_status_retryable(400), "400 Bad Request is not retryable")
+nox.test.assert_true(not pol.is_status_retryable(401), "401 Unauthorized is not retryable")
+nox.test.assert_true(not pol.is_status_retryable(404), "404 Not Found is not retryable")
+
+# 3. Idempotent methods vs POST
+# GET is idempotent -> retryable
+nox.test.assert_true(pol.should_retry_status("GET", 0, 503), "GET with 503 is retryable on attempt 0")
+nox.test.assert_true(pol.should_retry_status("GET", 2, 503), "GET with 503 is retryable on attempt 2")
+nox.test.assert_true(not pol.should_retry_status("GET", 3, 503), "attempt 3 reaches max_retries limit")
+
+# POST is NOT idempotent by default -> NOT retryable
+nox.test.assert_true(not pol.should_retry_status("POST", 0, 503), "POST is not retryable by default for safety")
+nox.test.assert_true(not pol.should_retry_error("POST", 0), "POST transport error is not retryable by default")
+
+# 4. Opt-in POST retry
+safe_post_pol: RetryPolicy = RetryPolicy(3, 100, 1000, True, True)
+nox.test.assert_true(safe_post_pol.should_retry_status("POST", 0, 503), "POST is retryable when explicitly enabled")
+nox.test.assert_true(safe_post_pol.should_retry_error("POST", 0), "POST transport error retryable when explicitly enabled")
+
+print("retry_test passed")

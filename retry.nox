@@ -1,0 +1,70 @@
+# retry.nox — Configurable retry policy with exponential backoff and idempotency protection.
+
+class RetryPolicy:
+    max_retries: int
+    backoff_factor_ms: int
+    max_backoff_ms: int
+    retry_on_transport_error: bool
+    retry_post: bool
+
+    def __init__(
+        self: RetryPolicy,
+        max_retries: int = 0,
+        backoff_factor_ms: int = 100,
+        max_backoff_ms: int = 10000,
+        retry_on_transport_error: bool = True,
+        retry_post: bool = False
+    ) -> None:
+        self.max_retries = max_retries
+        self.backoff_factor_ms = backoff_factor_ms
+        self.max_backoff_ms = max_backoff_ms
+        self.retry_on_transport_error = retry_on_transport_error
+        self.retry_post = retry_post
+
+    def _is_method_retryable(self: RetryPolicy, method: str) -> bool:
+        if method == "GET" or method == "HEAD" or method == "OPTIONS":
+            return True
+        if method == "POST" and self.retry_post:
+            return True
+        return False
+
+    def is_status_retryable(self: RetryPolicy, status_code: int) -> bool:
+        # Default retryable transient and rate-limiting HTTP status codes
+        if status_code == 408: # Request Timeout
+            return True
+        if status_code == 429: # Too Many Requests
+            return True
+        if status_code == 500: # Internal Server Error
+            return True
+        if status_code == 502: # Bad Gateway
+            return True
+        if status_code == 503: # Service Unavailable
+            return True
+        if status_code == 504: # Gateway Timeout
+            return True
+        return False
+
+    def should_retry_status(self: RetryPolicy, method: str, attempt: int, status_code: int) -> bool:
+        if attempt >= self.max_retries:
+            return False
+        if not self._is_method_retryable(method):
+            return False
+        return self.is_status_retryable(status_code)
+
+    def should_retry_error(self: RetryPolicy, method: str, attempt: int) -> bool:
+        if attempt >= self.max_retries:
+            return False
+        if not self._is_method_retryable(method):
+            return False
+        return self.retry_on_transport_error
+
+    def calculate_delay_ms(self: RetryPolicy, attempt: int) -> int:
+        multiplier: int = 1
+        i: int = 0
+        while i < attempt:
+            multiplier = multiplier * 2
+            i = i + 1
+        delay: int = self.backoff_factor_ms * multiplier
+        if delay > self.max_backoff_ms:
+            return self.max_backoff_ms
+        return delay

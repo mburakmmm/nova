@@ -1,0 +1,90 @@
+# url.nox — Safe URL resolution, validation, query encoding, and credential protection.
+
+import errors
+from errors import InvalidUrlError
+import nox.url
+from nox.url import URL
+import nox.strings
+
+def sanitize_url(raw_url: str) -> str:
+    # Redacts user:password from URL strings for safe error messages and logging
+    at_idx: int = nox.strings.index_of(raw_url, "@")
+    if at_idx < 0:
+        return raw_url
+    scheme_idx: int = nox.strings.index_of(raw_url, "://")
+    if scheme_idx < 0:
+        return raw_url
+    prefix: str = raw_url[:scheme_idx + 3]
+    remainder: str = raw_url[scheme_idx + 3:]
+    at_in_rem: int = nox.strings.index_of(remainder, "@")
+    if at_in_rem < 0:
+        return raw_url
+    userinfo: str = remainder[:at_in_rem]
+    host_and_rest: str = remainder[at_in_rem + 1:]
+    colon_idx: int = nox.strings.index_of(userinfo, ":")
+    if colon_idx >= 0:
+        user: str = userinfo[:colon_idx]
+        return prefix + user + ":***@" + host_and_rest
+    return prefix + "***@" + host_and_rest
+
+def _join_paths(base: str, path: str) -> str:
+    if len(base) == 0:
+        return path
+    if len(path) == 0:
+        return base
+    base_ends_slash: bool = nox.strings.ends_with(base, "/")
+    path_starts_slash: bool = nox.strings.starts_with(path, "/")
+    if base_ends_slash and path_starts_slash:
+        return base + path[1:]
+    if (not base_ends_slash) and (not path_starts_slash):
+        return base + "/" + path
+    return base + path
+
+def resolve_url(base_url: str, url_or_path: str, params: dict[str, str] | None = None) -> str:
+    combined: str = ""
+    is_absolute: bool = nox.strings.starts_with(url_or_path, "http://") or nox.strings.starts_with(url_or_path, "https://")
+    if is_absolute:
+        combined = url_or_path
+    else:
+        if len(base_url) == 0:
+            raise InvalidUrlError("Relative URL provided without base_url: " + url_or_path)
+        combined = _join_paths(base_url, url_or_path)
+
+    u: URL = nox.url.parse(combined)
+    
+    # Validate scheme
+    if u.scheme != "http" and u.scheme != "https":
+        raise InvalidUrlError("Unsupported URL scheme: " + u.scheme + ". Only http and https are supported.")
+
+    # Validate host
+    if len(u.host) == 0:
+        raise InvalidUrlError("URL host cannot be empty: " + sanitize_url(combined))
+
+    # Reject embedded credentials in URL (AGENTS.md §7)
+    if len(u.userinfo) > 0:
+        raise InvalidUrlError("Embedded credentials in URLs are rejected for security: " + sanitize_url(combined))
+
+    # Merge query parameters
+    merged_query: dict[str, str] = {}
+    for k in u.query:
+        merged_query[k] = u.query[k]
+    if params is not None:
+        for pk in params:
+            merged_query[pk] = params[pk]
+
+    # Reconstruct clean URL without fragment (RFC 7230 §5.1)
+    port_part: str = ""
+    if u.scheme == "http" and u.port != 80 and u.port > 0:
+        port_part = ":" + str(u.port)
+    elif u.scheme == "https" and u.port != 443 and u.port > 0:
+        port_part = ":" + str(u.port)
+
+    path_part: str = u.path
+    if len(path_part) == 0:
+        path_part = "/"
+
+    query_part: str = ""
+    if len(merged_query) > 0:
+        query_part = "?" + nox.url.query_encode(merged_query)
+
+    return u.scheme + "://" + u.host + port_part + path_part + query_part

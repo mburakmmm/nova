@@ -1,0 +1,52 @@
+# transport.nox — Transport adapter wrapping nox.http stdlib interface.
+
+import nox.http
+from nox.http import HttpResponse, HttpError
+import nox.time
+import request
+from request import Request
+import response
+from response import Response
+import headers
+from headers import Headers, headers_from_dict
+import errors
+from errors import TransportError, UnsupportedFeatureError
+import url
+from url import sanitize_url
+
+class TransportAdapter:
+    def __init__(self: TransportAdapter) -> None:
+        pass
+
+    def execute(self: TransportAdapter, req: Request) -> Response:
+        method: str = req.method
+        target_url: str = req.url
+        raw_headers: dict[str, str] = req.headers.to_dict()
+
+        if method == "GET":
+            start_ms: int = nox.time.now_ms()
+            try:
+                res: HttpResponse = nox.http.get(target_url, raw_headers)
+                elapsed: int = nox.time.now_ms() - start_ms
+                resp_headers: Headers = headers_from_dict(res.headers)
+                return Response(res.status, res.body, resp_headers, target_url, "GET", elapsed)
+            except HttpError as e:
+                raise TransportError("GET request failed for " + sanitize_url(target_url) + ": " + str(e))
+
+        if method == "POST":
+            start_ms: int = nox.time.now_ms()
+            try:
+                res: HttpResponse = nox.http.post(target_url, req.body, raw_headers)
+                elapsed: int = nox.time.now_ms() - start_ms
+                resp_headers: Headers = headers_from_dict(res.headers)
+                return Response(res.status, res.body, resp_headers, target_url, "POST", elapsed)
+            except HttpError as e:
+                raise TransportError("POST request failed for " + sanitize_url(target_url) + ": " + str(e))
+
+        if method == "PUT" or method == "PATCH" or method == "DELETE" or method == "HEAD" or method == "OPTIONS":
+            raise UnsupportedFeatureError(
+                method,
+                "HTTP method '" + method + "' is not supported by the underlying Nox runtime transport. See docs/transport-capabilities.md."
+            )
+
+        raise UnsupportedFeatureError(method, "Unrecognized HTTP method: " + method)

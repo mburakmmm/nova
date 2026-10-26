@@ -1,0 +1,48 @@
+# errors.nox — Structured error hierarchy for Nova HTTP Client.
+
+class NovaError(Exception):
+    message: str
+
+    def __init__(self: NovaError, message: str) -> None:
+        self.message = message
+
+class TransportError(NovaError):
+    pass
+
+class ConnectionError(TransportError):
+    pass
+
+class HttpStatusError(NovaError):
+    status_code: int
+    url: str
+
+    def __init__(self: HttpStatusError, status_code: int, url: str, message: str) -> None:
+        self.status_code = status_code
+        self.url = url
+        self.message = message
+
+class InvalidUrlError(NovaError):
+    pass
+
+class InvalidHeaderError(NovaError):
+    pass
+
+class DecodeError(NovaError):
+    pass
+
+class EncodeError(NovaError):
+    pass
+
+class RetryExhaustedError(NovaError):
+    attempts: int
+
+    def __init__(self: RetryExhaustedError, attempts: int, message: str) -> None:
+        self.attempts = attempts
+        self.message = message
+
+class UnsupportedFeatureError(NovaError):
+    feature: str
+
+    def __init__(self: UnsupportedFeatureError, feature: str, message: str) -> None:
+        self.feature = feature
+        self.message = message

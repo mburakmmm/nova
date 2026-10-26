@@ -1,0 +1,13 @@
+# examples/basic_auth.nox — Authenticated client requests.
+
+import nova
+from nova import Client, Response
+
+cli: Client = Client("https://httpbin.org")
+cli.set_basic_auth("user123", "secret_pass")
+
+print("Executing basic auth request...")
+resp: Response = cli.get("/basic-auth/user123/secret_pass")
+
+print("Auth Status:", resp.status_code)
+print("Is success:", resp.is_success())

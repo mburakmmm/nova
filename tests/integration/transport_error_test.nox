@@ -1,0 +1,22 @@
+# tests/integration/transport_error_test.nox — Verifies network failures raise TransportError.
+
+import nox.test
+import nova
+from nova import Client, Response
+import errors
+from errors import TransportError, NovaError
+
+cli: Client = Client("http://127.0.0.1:54321")
+
+caught_transport_err: bool = False
+try:
+    # Port 54321 is not open, connection should fail
+    resp: Response = cli.get("/fail_test")
+except TransportError as te:
+    caught_transport_err = True
+except NovaError as ne:
+    caught_transport_err = True
+
+nox.test.assert_true(caught_transport_err, "connection refused raises TransportError / NovaError")
+
+print("transport_error_test passed")

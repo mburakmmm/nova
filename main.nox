@@ -1,0 +1,52 @@
+# main.nox — Nova demonstration entry point.
+
+import nova
+from nova import Client, Response, Headers, BasicAuth, BearerAuth, CookieJar, RetryPolicy
+
+print("=== Nova Modern HTTP Client for Nox ===")
+
+# 1. URL Resolution & Query Encoding
+cli: Client = Client("https://httpbin.org")
+cli.set_header("X-Custom-Client", "Nova-Client-1.0")
+
+print("[1] Client configured with base_url:", cli.base_url)
+
+# 2. Basic and Bearer Authentication Redaction Demonstration
+basic: BasicAuth = BasicAuth("api_user", "super_secret_password")
+bearer: BearerAuth = BearerAuth("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.token")
+
+print("[2] Safe credential logging:")
+print("    Basic auth redaction:", basic.redacted())
+print("    Bearer auth redaction:", bearer.redacted())
+
+# 3. Cookie Jar Isolation
+jar: CookieJar = CookieJar()
+jar.set("session_id", "sess_987654321", "httpbin.org", "/")
+jar.set("preferences", "theme=dark", "httpbin.org", "/")
+print("[3] CookieJar formatted header:", jar.to_cookie_header("https://httpbin.org/get"))
+
+# 4. Retry Policy Demonstration
+policy: RetryPolicy = RetryPolicy(3, 100, 5000)
+print("[4] Exponential Backoff Delays:")
+print("    Attempt 1 delay (ms):", policy.calculate_delay_ms(1))
+print("    Attempt 2 delay (ms):", policy.calculate_delay_ms(2))
+print("    Attempt 3 delay (ms):", policy.calculate_delay_ms(3))
+
+# 5. Live GET Request
+print("[5] Executing live GET request to https://httpbin.org/get ...")
+resp: Response = cli.get("/get", {"source": "nova_demo", "version": "1.0"})
+print("    Status Code:", resp.status_code)
+print("    Is Success:", resp.is_success())
+print("    Elapsed time:", resp.elapsed_ms, "ms")
+
+# 6. JSON Parsing from Response
+if resp.is_success():
+    print("    Response body length:", len(resp.body))
+
+# 7. Live POST JSON Request
+print("[6] Executing live POST JSON request to https://httpbin.org/post ...")
+post_resp: Response = cli.post_json("/post", "{\"project\":\"nova\",\"language\":\"nox\"}")
+print("    POST Status Code:", post_resp.status_code)
+print("    POST Is Success:", post_resp.is_success())
+
+print("=== Nova demonstration complete ===")

@@ -1,0 +1,127 @@
+# cookies.nox — Session cookie jar with per-client isolation.
+
+import headers
+from headers import Headers
+import errors
+from errors import InvalidHeaderError
+import nox.strings
+import nox.url
+from nox.url import URL
+
+def _validate_cookie_token(token: str) -> None:
+    i: int = 0
+    n: int = len(token)
+    while i < n:
+        b: int = nox.strings.byte_at(token, i)
+        if b == 13 or b == 10:
+            raise InvalidHeaderError("CR/LF forbidden in cookie")
+        if b == 59: # ;
+            raise InvalidHeaderError("Semicolon forbidden in cookie name/value")
+        i = i + 1
+
+class CookieJar:
+    cookies: dict[str, str]
+    domains: dict[str, str]
+    paths: dict[str, str]
+
+    def __init__(self: CookieJar) -> None:
+        self.cookies = {}
+        self.domains = {}
+        self.paths = {}
+
+    def set(self: CookieJar, name: str, value: str, domain: str = "", path: str = "/") -> None:
+        _validate_cookie_token(name)
+        _validate_cookie_token(value)
+        self.cookies[name] = value
+        self.domains[name] = domain
+        self.paths[name] = path
+
+    def get(self: CookieJar, name: str) -> str | None:
+        if name in self.cookies:
+            return self.cookies[name]
+        return None
+
+    def has(self: CookieJar, name: str) -> bool:
+        return name in self.cookies
+
+    def delete(self: CookieJar, name: str) -> None:
+        if name in self.cookies:
+            del self.cookies[name]
+            del self.domains[name]
+            del self.paths[name]
+
+    def len(self: CookieJar) -> int:
+        return len(self.cookies)
+
+    def clear(self: CookieJar) -> None:
+        self.cookies = {}
+        self.domains = {}
+        self.paths = {}
+
+    def extract_from_response(self: CookieJar, target_url: str, resp_headers: Headers) -> None:
+        raw_cookie: str = resp_headers.get("Set-Cookie", "")
+        if len(raw_cookie) == 0:
+            return
+        
+        target: URL = nox.url.parse(target_url)
+        # Parse first segment before ';' as name=value
+        parts: list[str] = nox.strings.split(raw_cookie, ";")
+        if len(parts) == 0:
+            return
+        first: str = nox.strings.trim(parts[0])
+        eq: int = nox.strings.index_of(first, "=")
+        if eq <= 0:
+            return
+        name: str = nox.strings.trim(first[:eq])
+        val: str = nox.strings.trim(first[eq + 1:])
+
+        cookie_domain: str = target.host
+        cookie_path: str = "/"
+
+        # Inspect directives like Domain= and Path=
+        i: int = 1
+        while i < len(parts):
+            p: str = nox.strings.trim(parts[i])
+            peq: int = nox.strings.index_of(p, "=")
+            if peq > 0:
+                dkey: str = nox.strings.lower(nox.strings.trim(p[:peq]))
+                dval: str = nox.strings.trim(p[peq + 1:])
+                if dkey == "domain":
+                    cookie_domain = dval
+                elif dkey == "path":
+                    cookie_path = dval
+            i = i + 1
+
+        self.set(name, val, cookie_domain, cookie_path)
+
+    def to_cookie_header(self: CookieJar, target_url: str = "") -> str:
+        if len(self.cookies) == 0:
+            return ""
+        
+        target_host: str = ""
+        if len(target_url) > 0:
+            u: URL = nox.url.parse(target_url)
+            target_host = u.host
+
+        out: str = ""
+        for name in self.cookies:
+            # Check domain isolation if domain specified
+            c_dom: str = self.domains[name]
+            if len(c_dom) > 0 and len(target_host) > 0:
+                if (not nox.strings.ends_with(target_host, c_dom)) and target_host != c_dom:
+                    continue
+            
+            val: str = self.cookies[name]
+            part: str = name + "=" + val
+            if len(out) == 0:
+                out = part
+            else:
+                out = out + "; " + part
+        return out
+
+    def apply_to_request(self: CookieJar, target_url: str, req_headers: Headers) -> None:
+        if req_headers.has("Cookie"):
+            return
+        hdr: str = self.to_cookie_header(target_url)
+        if len(hdr) > 0:
+            req_headers.set("Cookie", hdr)

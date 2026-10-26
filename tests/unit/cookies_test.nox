@@ -1,0 +1,66 @@
+# tests/unit/cookies_test.nox — Test cookie jar storage, domain isolation, and Set-Cookie parsing.
+
+import nox.test
+import cookies
+from cookies import CookieJar
+import headers
+from headers import Headers
+import errors
+from errors import InvalidHeaderError
+
+# 1. Basic Set & Get
+jar: CookieJar = CookieJar()
+jar.set("session", "abc123xyz", "example.com", "/")
+jar.set("user_id", "42", "example.com", "/")
+
+val_sess: str | None = jar.get("session")
+nox.test.assert_true(val_sess is not None, "session cookie is not None")
+if val_sess is not None:
+    nox.test.assert_eq_str(val_sess, "abc123xyz", "session cookie retrieved")
+
+val_uid: str | None = jar.get("user_id")
+nox.test.assert_true(val_uid is not None, "user_id cookie is not None")
+if val_uid is not None:
+    nox.test.assert_eq_str(val_uid, "42", "user_id cookie retrieved")
+
+nox.test.assert_true(jar.get("nonexistent") is None, "nonexistent cookie returns None")
+
+# 2. Format to Cookie Header
+hdr: str = jar.to_cookie_header("https://example.com/api")
+nox.test.assert_true("session=abc123xyz" in hdr, "session cookie formatted in header")
+nox.test.assert_true("user_id=42" in hdr, "user_id cookie formatted in header")
+
+# 3. Domain Isolation
+# Cookie set for internal.com should not be sent to external.com
+jar.set("secret_token", "sec999", "internal.com", "/")
+hdr_external: str = jar.to_cookie_header("https://external.com/api")
+nox.test.assert_true("secret_token" not in hdr_external, "cross-origin cookie not leaked to mismatched domain")
+
+# 4. Extract Set-Cookie from response headers
+resp_h: Headers = Headers()
+resp_h.set("Set-Cookie", "auth_sess=sess_jwt_token_88; Domain=service.net; Path=/app; HttpOnly")
+
+target_jar: CookieJar = CookieJar()
+target_jar.extract_from_response("https://service.net/app/login", resp_h)
+nox.test.assert_true(target_jar.has("auth_sess"), "cookie extracted from Set-Cookie header")
+val_auth: str | None = target_jar.get("auth_sess")
+nox.test.assert_true(val_auth is not None, "auth_sess is not None")
+if val_auth is not None:
+    nox.test.assert_eq_str(val_auth, "sess_jwt_token_88", "cookie value parsed from Set-Cookie")
+
+# 5. Apply to request
+req_h: Headers = Headers()
+target_jar.apply_to_request("https://service.net/app/dashboard", req_h)
+nox.test.assert_true(req_h.has("Cookie"), "Cookie header applied to request")
+nox.test.assert_eq_str(req_h.get("Cookie"), "auth_sess=sess_jwt_token_88", "Cookie header value matches jar")
+
+# 6. Semicolon or CRLF rejected in cookie token
+bad_cookie_rejected: bool = False
+try:
+    jar.set("bad;name", "value")
+except InvalidHeaderError as e:
+    bad_cookie_rejected = True
+
+nox.test.assert_true(bad_cookie_rejected, "semicolon in cookie name rejected")
+
+print("cookies_test passed")

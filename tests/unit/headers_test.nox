@@ -1,0 +1,71 @@
+# tests/unit/headers_test.nox — Test case-insensitive headers and CRLF injection defenses.
+
+import nox.test
+import headers
+from headers import Headers, headers_from_dict
+import errors
+from errors import InvalidHeaderError
+
+# 1. Case-insensitive lookup
+h: Headers = Headers()
+h.set("Content-Type", "application/json")
+h.set("X-API-KEY", "secret-token-123")
+
+nox.test.assert_eq_str(h.get("content-type"), "application/json", "lowercase lookup matches")
+nox.test.assert_eq_str(h.get("CONTENT-TYPE"), "application/json", "uppercase lookup matches")
+nox.test.assert_eq_str(h.get("Content-Type"), "application/json", "exact case lookup matches")
+nox.test.assert_true(h.has("x-api-key"), "has() is case-insensitive")
+nox.test.assert_true(h.has("X-Api-Key"), "has() works with mixed case")
+
+# 2. Deletion
+h.delete("x-api-key")
+nox.test.assert_true(not h.has("X-API-KEY"), "deleted header not found")
+
+# 3. CRLF injection protection in header name
+crlf_name_rejected: bool = False
+try:
+    bad_h: Headers = Headers()
+    bad_h.set("Injected\r\nHeader", "malicious_value")
+except InvalidHeaderError as e:
+    crlf_name_rejected = True
+
+nox.test.assert_true(crlf_name_rejected, "CRLF in header name rejected")
+
+# 4. CRLF injection protection in header value
+crlf_val_rejected: bool = False
+try:
+    bad_h2: Headers = Headers()
+    bad_h2.set("Valid-Name", "value\r\nInjected: true")
+except InvalidHeaderError as e:
+    crlf_val_rejected = True
+
+nox.test.assert_true(crlf_val_rejected, "CRLF in header value rejected")
+
+# 5. Empty header name rejected
+empty_name_rejected: bool = False
+try:
+    bad_h3: Headers = Headers()
+    bad_h3.set("", "some_value")
+except InvalidHeaderError as e:
+    empty_name_rejected = True
+
+nox.test.assert_true(empty_name_rejected, "Empty header name rejected")
+
+# 6. Cloning isolation
+orig: Headers = Headers()
+orig.set("Authorization", "Bearer tok1")
+copy_h: Headers = orig.clone()
+copy_h.set("Authorization", "Bearer tok2")
+nox.test.assert_eq_str(orig.get("Authorization"), "Bearer tok1", "original unchanged by clone mutation")
+nox.test.assert_eq_str(copy_h.get("Authorization"), "Bearer tok2", "clone reflects mutation")
+
+# 7. Merge dictionary
+merged: Headers = Headers()
+merged.set("User-Agent", "Nova/0.1.0")
+merged.set("Accept", "*/*")
+merged.merge_dict({"Accept": "application/json", "X-Trace": "12345"})
+nox.test.assert_eq_str(merged.get("Accept"), "application/json", "merged dict overrides existing key")
+nox.test.assert_eq_str(merged.get("X-Trace"), "12345", "merged dict adds new key")
+nox.test.assert_eq_str(merged.get("User-Agent"), "Nova/0.1.0", "untouched key preserved")
+
+print("headers_test passed")

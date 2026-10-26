@@ -1,0 +1,47 @@
+# tests/unit/errors_test.nox — Test exception taxonomy and fields.
+
+import nox.test
+import errors
+from errors import NovaError, TransportError, ConnectionError, HttpStatusError, InvalidUrlError, InvalidHeaderError, DecodeError, RetryExhaustedError, UnsupportedFeatureError
+
+# 1. Base NovaError catching
+caught_base: bool = False
+try:
+    raise ConnectionError("Connection refused to 127.0.0.1:9999")
+except NovaError as e:
+    caught_base = True
+
+nox.test.assert_true(caught_base, "ConnectionError caught as base NovaError")
+
+# 2. HttpStatusError preserves status and URL
+status_err_caught: bool = False
+try:
+    raise HttpStatusError(404, "https://api.example.com/notfound", "HTTP 404 Not Found")
+except HttpStatusError as he:
+    status_err_caught = True
+    nox.test.assert_eq_int(he.status_code, 404, "status_code preserved in HttpStatusError")
+    nox.test.assert_eq_str(he.url, "https://api.example.com/notfound", "url preserved in HttpStatusError")
+
+nox.test.assert_true(status_err_caught, "HttpStatusError caught")
+
+# 3. RetryExhaustedError records attempts
+retry_err_caught: bool = False
+try:
+    raise RetryExhaustedError(3, "Failed after 3 attempts")
+except RetryExhaustedError as re:
+    retry_err_caught = True
+    nox.test.assert_eq_int(re.attempts, 3, "attempts preserved in RetryExhaustedError")
+
+nox.test.assert_true(retry_err_caught, "RetryExhaustedError caught")
+
+# 4. UnsupportedFeatureError records feature name
+unsupported_caught: bool = False
+try:
+    raise UnsupportedFeatureError("PUT", "PUT method not supported in stdlib")
+except UnsupportedFeatureError as ue:
+    unsupported_caught = True
+    nox.test.assert_eq_str(ue.feature, "PUT", "feature name preserved in UnsupportedFeatureError")
+
+nox.test.assert_true(unsupported_caught, "UnsupportedFeatureError caught")
+
+print("errors_test passed")

@@ -1,0 +1,35 @@
+# tests/unit/client_config_test.nox — Test Client configuration, default headers, and instance isolation.
+
+import nox.test
+import client
+from client import Client
+
+# 1. Defaults
+c1: Client = Client("https://api.example.com")
+nox.test.assert_eq_str(c1.base_url, "https://api.example.com", "base_url set")
+nox.test.assert_eq_str(c1.default_headers.get("User-Agent"), "Nova/0.1.0", "default User-Agent header")
+nox.test.assert_eq_str(c1.default_headers.get("Accept"), "*/*", "default Accept header")
+
+# 2. Custom header chaining
+c1.set_header("X-App-ID", "app_12345")
+nox.test.assert_eq_str(c1.default_headers.get("X-App-ID"), "app_12345", "custom header set on client")
+
+# 3. Instance isolation: c2 does not inherit c1's custom headers
+c2: Client = Client("https://other.example.com")
+nox.test.assert_true(not c2.default_headers.has("X-App-ID"), "c2 is isolated from c1 headers")
+
+# 4. Auth configuration
+c1.set_bearer_auth("token_xyz_99")
+nox.test.assert_true(c1.bearer_auth is not None, "bearer_auth configured")
+nox.test.assert_true(c1.basic_auth is None, "basic_auth is None when bearer is set")
+
+c1.set_basic_auth("user1", "pass1")
+nox.test.assert_true(c1.basic_auth is not None, "basic_auth configured")
+nox.test.assert_true(c1.bearer_auth is None, "bearer_auth cleared when basic is set")
+
+# 5. Cookie jar enablement
+c1.enable_cookies()
+nox.test.assert_true(c1.cookies is not None, "cookie jar enabled on client")
+nox.test.assert_true(c2.cookies is None, "cookie jar remains None on unconfigured client")
+
+print("client_config_test passed")

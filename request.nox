@@ -1,0 +1,25 @@
+# request.nox — Canonical HTTP request representation.
+
+import headers
+from headers import Headers
+
+class Request:
+    method: str
+    url: str
+    headers: Headers
+    body: str
+    timeout_ms: int
+
+    def __init__(
+        self: Request,
+        method: str,
+        url: str,
+        headers: Headers,
+        body: str = "",
+        timeout_ms: int = 0
+    ) -> None:
+        self.method = method
+        self.url = url
+        self.headers = headers
+        self.body = body
+        self.timeout_ms = timeout_ms

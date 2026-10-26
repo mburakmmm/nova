@@ -1,0 +1,216 @@
+# client.nox — Reusable HTTP Client session with defaults, auth, cookies, and retry orchestration.
+
+import nox.time
+import nox.url
+import headers
+from headers import Headers
+import url
+from url import resolve_url
+import auth
+from auth import BasicAuth, BearerAuth
+import cookies
+from cookies import CookieJar
+import retry
+from retry import RetryPolicy
+import response
+from response import Response
+import request
+from request import Request
+import transport
+from transport import TransportAdapter
+import errors
+from errors import RetryExhaustedError, TransportError, UnsupportedFeatureError
+
+class Client:
+    base_url: str
+    default_headers: Headers
+    basic_auth: BasicAuth | None
+    bearer_auth: BearerAuth | None
+    cookies: CookieJar | None
+    retry_policy: RetryPolicy | None
+    raise_on_status: bool
+    transport: TransportAdapter
+
+    def __init__(
+        self: Client,
+        base_url: str = "",
+        raise_for_status: bool = False
+    ) -> None:
+        self.base_url = base_url
+        self.default_headers = Headers()
+        self.default_headers.set("User-Agent", "Nova/0.1.0")
+        self.default_headers.set("Accept", "*/*")
+        self.basic_auth = None
+        self.bearer_auth = None
+        self.cookies = None
+        self.retry_policy = None
+        self.raise_on_status = raise_for_status
+        self.transport = TransportAdapter()
+
+    def set_header(self: Client, name: str, value: str) -> Client:
+        self.default_headers.set(name, value)
+        return self
+
+    def set_basic_auth(self: Client, username: str, password: str) -> Client:
+        self.basic_auth = BasicAuth(username, password)
+        self.bearer_auth = None
+        return self
+
+    def set_bearer_auth(self: Client, token: str) -> Client:
+        self.bearer_auth = BearerAuth(token)
+        self.basic_auth = None
+        return self
+
+    def enable_cookies(self: Client) -> Client:
+        if self.cookies is None:
+            self.cookies = CookieJar()
+        return self
+
+    def set_retry_policy(self: Client, policy: RetryPolicy) -> Client:
+        self.retry_policy = policy
+        return self
+
+    def send(self: Client, req: Request) -> Response:
+        pol: RetryPolicy | None = self.retry_policy
+        attempt: int = 0
+        last_error_msg: str = ""
+
+        while True:
+            try:
+                res: Response = self.transport.execute(req)
+
+                # Cookie extraction if cookie jar enabled
+                jar: CookieJar | None = self.cookies
+                if jar is not None:
+                    jar.extract_from_response(req.url, res.headers)
+
+                # Check if response status should be retried
+                if pol is not None:
+                    if pol.should_retry_status(req.method, attempt, res.status_code):
+                        attempt = attempt + 1
+                        delay: int = pol.calculate_delay_ms(attempt)
+                        nox.time.sleep_ms(delay)
+                        continue
+
+                if self.raise_on_status:
+                    res.raise_for_status()
+
+                return res
+            except TransportError as te:
+                last_error_msg = str(te)
+                if pol is not None:
+                    if pol.should_retry_error(req.method, attempt):
+                        attempt = attempt + 1
+                        delay: int = pol.calculate_delay_ms(attempt)
+                        nox.time.sleep_ms(delay)
+                        continue
+                raise te
+
+        raise RetryExhaustedError(attempt, "Retries exhausted: " + last_error_msg)
+
+    def request(
+        self: Client,
+        method: str,
+        url_or_path: str,
+        body: str = "",
+        json: str = "",
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None
+    ) -> Response:
+        full_url: str = resolve_url(self.base_url, url_or_path, params)
+
+        # Merge headers: client defaults -> caller overrides
+        req_headers: Headers = self.default_headers.clone()
+        if headers is not None:
+            req_headers.merge_dict(headers)
+
+        # Apply authentication
+        b_auth: BasicAuth | None = self.basic_auth
+        if b_auth is not None:
+            b_auth.apply(req_headers)
+
+        tok_auth: BearerAuth | None = self.bearer_auth
+        if tok_auth is not None:
+            tok_auth.apply(req_headers)
+
+        # Apply cookies
+        jar: CookieJar | None = self.cookies
+        if jar is not None:
+            jar.apply_to_request(full_url, req_headers)
+
+        # Handle JSON body
+        payload: str = body
+        if len(json) > 0:
+            payload = json
+            if not req_headers.has("Content-Type"):
+                req_headers.set("Content-Type", "application/json")
+
+        req: Request = Request(method, full_url, req_headers, payload)
+        return self.send(req)
+
+    def get(
+        self: Client,
+        url: str,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None
+    ) -> Response:
+        return self.request("GET", url, "", "", params, headers)
+
+    def post(
+        self: Client,
+        url: str,
+        body: str = "",
+        json: str = "",
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None
+    ) -> Response:
+        return self.request("POST", url, body, json, params, headers)
+
+    def post_json(
+        self: Client,
+        url: str,
+        json_str: str,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None
+    ) -> Response:
+        return self.request("POST", url, "", json_str, params, headers)
+
+    def post_form(
+        self: Client,
+        url: str,
+        data: dict[str, str],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None
+    ) -> Response:
+        encoded_form: str = nox.url.query_encode(data)
+        form_headers: dict[str, str] = {"Content-Type": "application/x-www-form-urlencoded"}
+        if headers is not None:
+            for k in headers:
+                form_headers[k] = headers[k]
+        return self.request("POST", url, encoded_form, "", params, form_headers)
+
+    def put(
+        self: Client,
+        url: str,
+        body: str = "",
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None
+    ) -> Response:
+        return self.request("PUT", url, body, "", params, headers)
+
+    def patch(
+        self: Client,
+        url: str,
+        body: str = "",
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None
+    ) -> Response:
+        return self.request("PATCH", url, body, "", params, headers)
+
+    def delete(
+        self: Client,
+        url: str,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None
+    ) -> Response:
+        return self.request("DELETE", url, "", "", params, headers)

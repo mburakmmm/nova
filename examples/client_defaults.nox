@@ -1,0 +1,16 @@
+# examples/client_defaults.nox — Session-level default configuration and cookies.
+
+import nova
+from nova import Client, Response, RetryPolicy
+
+cli: Client = Client("https://httpbin.org")
+cli.set_header("X-Service-Name", "PaymentService")
+cli.set_bearer_auth("sample_jwt_token_12345")
+cli.enable_cookies()
+cli.set_retry_policy(RetryPolicy(3, 150, 5000))
+
+print("Executing request with client defaults and retry policy...")
+resp: Response = cli.get("/headers")
+
+print("Status:", resp.status_code)
+print("Is success:", resp.is_success())

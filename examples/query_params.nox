@@ -1,0 +1,14 @@
+# examples/query_params.nox — Query parameters encoding demonstration.
+
+import nova
+from nova import Response
+
+params: dict[str, str] = {
+    "search": "nox language",
+    "page": "1",
+    "filter": "published"
+}
+
+resp: Response = nova.get("https://httpbin.org/get", params)
+
+print("URL with query executed successfully. Status:", resp.status_code)

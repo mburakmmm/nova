@@ -1,0 +1,89 @@
+# headers.nox — Case-insensitive HTTP header collection with CRLF injection protection.
+
+import errors
+from errors import InvalidHeaderError
+import nox.strings
+
+def _contains_crlf(s: str) -> bool:
+    i: int = 0
+    n: int = len(s)
+    while i < n:
+        b: int = nox.strings.byte_at(s, i)
+        if b == 13: # \r
+            return True
+        if b == 10: # \n
+            return True
+        i = i + 1
+    return False
+
+def validate_header_entry(name: str, value: str) -> None:
+    if len(name) == 0:
+        raise InvalidHeaderError("Header name cannot be empty")
+    if _contains_crlf(name):
+        raise InvalidHeaderError("Header name contains forbidden CR/LF characters: " + name)
+    if _contains_crlf(value):
+        raise InvalidHeaderError("Header value contains forbidden CR/LF characters for header: " + name)
+
+class Headers:
+    entries: dict[str, str]
+    display_names: dict[str, str]
+
+    def __init__(self: Headers) -> None:
+        self.entries = {}
+        self.display_names = {}
+
+    def set(self: Headers, name: str, value: str) -> None:
+        validate_header_entry(name, value)
+        low: str = nox.strings.lower(name)
+        self.entries[low] = value
+        self.display_names[low] = name
+
+    def get(self: Headers, name: str, default: str = "") -> str:
+        low: str = nox.strings.lower(name)
+        if low in self.entries:
+            return self.entries[low]
+        return default
+
+    def get_opt(self: Headers, name: str) -> str | None:
+        low: str = nox.strings.lower(name)
+        if low in self.entries:
+            return self.entries[low]
+        return None
+
+    def has(self: Headers, name: str) -> bool:
+        low: str = nox.strings.lower(name)
+        return low in self.entries
+
+    def delete(self: Headers, name: str) -> None:
+        low: str = nox.strings.lower(name)
+        if low in self.entries:
+            del self.entries[low]
+            del self.display_names[low]
+
+    def len(self: Headers) -> int:
+        return len(self.entries)
+
+    def merge_dict(self: Headers, extra: dict[str, str]) -> None:
+        for k in extra:
+            self.set(k, extra[k])
+
+    def to_dict(self: Headers) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for low in self.entries:
+            orig_name: str = self.display_names[low]
+            out[orig_name] = self.entries[low]
+        return out
+
+    def clone(self: Headers) -> Headers:
+        h: Headers = Headers()
+        for low in self.entries:
+            orig_name: str = self.display_names[low]
+            val: str = self.entries[low]
+            h.set(orig_name, val)
+        return h
+
+def headers_from_dict(d: dict[str, str]) -> Headers:
+    h: Headers = Headers()
+    for k in d:
+        h.set(k, d[k])
+    return h
