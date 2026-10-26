@@ -156,6 +156,20 @@ Nova geliştirilirken Nox derleyicisinde (`noxc`) tespit edilen ve geliştiricil
 
 ---
 
+## 7. `nox.url` Standart Kütüphanesinde IPv6 Literal Hatası
+
+### Mevcut Durum & Problem:
+* **Dosya:** `stdlib/nox/url.nox` (satır ~110)
+* URL parse edilirken `host_port` ayrımı ilk `:` karakterine göre yapılmaktadır (`split_once(":")` benzeri mantık).
+* Örnek URL: `http://[::1]:8080/api`
+* `host_port` alanı `[::1]:8080` olduğunda ilk `:` ilk IPv6 heksadesimal basamağında eşleşmekte, port olarak `:1]:8080` alınmakta ve `UrlError("invalid port")` fırlatılmaktadır.
+* **Nova'daki Geçici Çözüm:** Nova `url.nox` içerisinde `[` ile başlayan IPv6 adreslerini `nox.url.parse`a girmeden önce ayırmakta ve köşeli parantezleri koruyarak URL oluşturmaktadır.
+
+### Önerilen Çözüm:
+* `stdlib/nox/url.nox` içinde port araması yapılırken, eğer host `[` ile başlıyorsa, eşleşen `]` karakterinden *sonraki* `:` aranmalıdır.
+
+---
+
 ## Özet Yol Haritası Eşleşmesi
 
 | Özellik | İlgili Dosya | Nova'da Açacağı Kapı |
@@ -164,3 +178,4 @@ Nova geliştirilirken Nox derleyicisinde (`noxc`) tespit edilen ve geliştiricil
 | `timeout_ms` parametresi | `runtime/stdlib_shims/http_client.zig` | Gerçek soket zaman aşımı koruması |
 | `body_bytes` desteği | `runtime/stdlib_shims/http_client.zig` | İkili veri indirme, resim/dosya akışı |
 | Akışlı okuma (Streaming) | `runtime/stdlib_shims/http_client.zig` | OOM olmadan büyük dosya indirme |
+| IPv6 port ayrımı | `stdlib/nox/url.nox` | Yerel `nox.url.parse` ile doğrudan IPv6 desteği |
