@@ -1,29 +1,26 @@
 # Nova Roadmap & Upstream RFCs
 
-This roadmap documents the phases of Nova and proposals for the upstream Nox compiler and standard library runtime.
+> This document synchronizes with [ROADMAP.md](../ROADMAP.md).
 
-## Completed (Phase 0 - 2)
+For the full phase-by-phase breakdown and checklist, see the root [ROADMAP.md](../ROADMAP.md).
 
-- [x] Full architectural scaffolding adhering to `Nova_AGENTS.md`.
-- [x] Verified GET/POST client over HTTP and HTTPS.
-- [x] URL resolution with base_url, path join, and safe query encoding.
-- [x] Case-insensitive `Headers` with CRLF injection guards.
-- [x] Basic and Bearer authentication with credential redaction.
-- [x] Per-client `CookieJar` with domain isolation and `Set-Cookie` parsing.
-- [x] Configurable `RetryPolicy` with exponential backoff and idempotency safety.
-- [x] Rich `Response` wrapper with predicates, `raise_for_status()`, and `json()` decoding.
-- [x] Structured error hierarchy (`NovaError` and 9 specialized exceptions).
-- [x] 11 unit and integration tests passing end-to-end under `noxc test`.
+## Completed Phases
+- **Phase 0 — Discovery and Feasibility**: Complete.
+- **Phase 1 — Nova MVP**: Complete.
+- **Phase 2 — Client Ergonomics**: Complete.
 
----
+## Current Milestone (Phase 3)
+- **Arbitrary HTTP Methods**: PUT/PATCH/DELETE/HEAD/OPTIONS. (Requires upstream `nox_http_request_raw` export).
+- **Request Timeout**: Socket/read timeout hooks. (Requires upstream `std.http.Client` timeout integration).
+- **Multipart Form Upload**: RFC 7578 pure Nox multipart builder.
+- **Redirect Policy**: Cross-origin credential stripping.
 
-## Upstream Proposal for Nox Runtime (`nox-lang`)
+## Upstream RFC Proposals for `nox-lang`
 
 ### 1. Export Generic HTTP Method in `noxrt.o`
-In `nox-lang/runtime/stdlib_shims/http_client.zig`, the internal `doRequest` function already accepts `method: std.http.Method`. However, only `nox_http_get_raw` and `nox_http_post_raw` are exported:
+In `nox-lang/runtime/stdlib_shims/http_client.zig`:
 
 ```zig
-// Proposal: Export generic request shim
 export fn nox_http_request_raw(
     rt: ?*anyopaque,
     method: ?[*:0]const u8,
@@ -33,10 +30,8 @@ export fn nox_http_request_raw(
 ) callconv(.c) ?*anyopaque
 ```
 
-Once exported in `noxrt.o` and declared in `stdlib/nox/http.nox`, Nova can immediately enable `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS` without changing Nova's public API structure.
-
 ### 2. Request Timeout Parameter
-Add a `timeout_ms: i64` parameter to `std.http.Client` request configuration in `http_client.zig` to enable true request-level socket/read timeouts.
+Add `timeout_ms: i64` configuration in `http_client.zig` to pass to `std.http.Client`.
 
-### 3. Binary & Multipart Streaming
-When byte buffers (`buffer.nox` / `std.ArrayList(u8)`) are integrated with `http_client.zig`, Nova can support true binary downloads and streaming file uploads.
+### 3. Binary & Streaming Support
+Expose raw byte buffer responses (`buffer.nox`) in `http_client.zig` to avoid NUL-byte truncation in binary payloads.
