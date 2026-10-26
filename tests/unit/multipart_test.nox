@@ -1,0 +1,51 @@
+# tests/unit/multipart_test.nox — Test RFC 7578 multipart/form-data encoding and file uploads.
+
+import nox.test
+import multipart
+from multipart import MultipartEncoder, MultipartFile, file_from_path
+import errors
+from errors import EncodeError
+import nox.fs
+
+# 1. Custom boundary framing
+enc: MultipartEncoder = MultipartEncoder("CustomBoundary123")
+enc.add_field("username", "ada_lovelace")
+enc.add_field("role", "developer")
+
+nox.test.assert_eq_str(enc.content_type(), "multipart/form-data; boundary=CustomBoundary123", "content_type header matches")
+
+body: str = enc.build()
+nox.test.assert_true("--CustomBoundary123\r\n" in body, "boundary prefix found")
+nox.test.assert_true("Content-Disposition: form-data; name=\"username\"\r\n\r\nada_lovelace\r\n" in body, "username field framed properly")
+nox.test.assert_true("Content-Disposition: form-data; name=\"role\"\r\n\r\ndeveloper\r\n" in body, "role field framed properly")
+nox.test.assert_true("--CustomBoundary123--\r\n" in body, "closing boundary found")
+
+# 2. File in-memory attachment
+f1: MultipartFile = MultipartFile("report", "summary.txt", "Report content here", "text/plain")
+enc.add_file(f1)
+body2: str = enc.build()
+nox.test.assert_true("filename=\"summary.txt\"" in body2, "filename attribute included")
+nox.test.assert_true("Content-Type: text/plain" in body2, "Content-Type header for file included")
+nox.test.assert_true("Report content here" in body2, "file content included")
+
+# 3. Reading file from filesystem
+fixture_path: str = "tests/unit/sample_fixture.txt"
+nox.fs.write_string(fixture_path, "sample payload data 98765")
+
+f_disk: MultipartFile = file_from_path("attachment", fixture_path, "text/plain")
+nox.test.assert_eq_str(f_disk.file_name, "sample_fixture.txt", "file basename extracted")
+nox.test.assert_eq_str(f_disk.content, "sample payload data 98765", "file content read from disk")
+
+# Clean up fixture file
+nox.fs.remove_file(fixture_path)
+
+# 4. Non-existent file raises EncodeError
+missing_rejected: bool = False
+try:
+    file_from_path("bad_field", "nonexistent_dir/does_not_exist.txt")
+except EncodeError as ee:
+    missing_rejected = True
+
+nox.test.assert_true(missing_rejected, "non-existent file raises EncodeError")
+
+print("multipart_test passed")

@@ -1,0 +1,103 @@
+# multipart.nox — RFC 7578 compliant multipart/form-data encoder and file upload support.
+
+import nox.fs
+import nox.strings
+import nox.time
+import errors
+from errors import EncodeError
+
+class MultipartFile:
+    field_name: str
+    file_name: str
+    content_type: str
+    content: str
+
+    def __init__(
+        self: MultipartFile,
+        field_name: str,
+        file_name: str,
+        content: str,
+        content_type: str = "text/plain"
+    ) -> None:
+        self.field_name = field_name
+        self.file_name = file_name
+        self.content = content
+        self.content_type = content_type
+
+def file_from_path(
+    field_name: str,
+    file_path: str,
+    content_type: str = "text/plain"
+) -> MultipartFile:
+    if not nox.fs.exists(file_path):
+        raise EncodeError("File not found for multipart upload: " + file_path)
+
+    # Extract basename
+    last_slash: int = -1
+    i: int = 0
+    n: int = len(file_path)
+    while i < n:
+        if file_path[i] == "/":
+            last_slash = i
+        i = i + 1
+
+    file_name: str = file_path
+    if last_slash >= 0:
+        file_name = file_path[last_slash + 1:]
+
+    content: str = nox.fs.read_to_string(file_path)
+    return MultipartFile(field_name, file_name, content, content_type)
+
+class MultipartEncoder:
+    boundary: str
+    fields: dict[str, str]
+    files: list[MultipartFile]
+
+    def __init__(self: MultipartEncoder, boundary: str = "") -> None:
+        if len(boundary) > 0:
+            self.boundary = boundary
+        else:
+            self.boundary = "----NovaBoundary" + str(nox.time.now_ms())
+        self.fields = {}
+        self.files = []
+
+    def add_field(self: MultipartEncoder, name: str, value: str) -> MultipartEncoder:
+        self.fields[name] = value
+        return self
+
+    def add_file(self: MultipartEncoder, file: MultipartFile) -> MultipartEncoder:
+        flist: list[MultipartFile] = self.files
+        flist.append(file)
+        self.files = flist
+        return self
+
+    def content_type(self: MultipartEncoder) -> str:
+        return "multipart/form-data; boundary=" + self.boundary
+
+    def build(self: MultipartEncoder) -> str:
+        out: str = ""
+        crlf: str = "\r\n"
+        b_prefix: str = "--" + self.boundary + crlf
+
+        # 1. Format text fields
+        for name in self.fields:
+            val: str = self.fields[name]
+            part: str = b_prefix
+            part = part + "Content-Disposition: form-data; name=\"" + name + "\"" + crlf + crlf
+            part = part + val + crlf
+            out = out + part
+
+        # 2. Format file attachments
+        f_idx: int = 0
+        while f_idx < len(self.files):
+            f: MultipartFile = self.files[f_idx]
+            part2: str = b_prefix
+            part2 = part2 + "Content-Disposition: form-data; name=\"" + f.field_name + "\"; filename=\"" + f.file_name + "\"" + crlf
+            part2 = part2 + "Content-Type: " + f.content_type + crlf + crlf
+            part2 = part2 + f.content + crlf
+            out = out + part2
+            f_idx = f_idx + 1
+
+        # 3. Closing boundary
+        out = out + "--" + self.boundary + "--" + crlf
+        return out

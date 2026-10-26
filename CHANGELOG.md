@@ -5,6 +5,22 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-26
+
+### Added
+- **Multipart Form-Data & File Uploads (`multipart.nox`)**:
+  - `MultipartEncoder`: RFC 7578 compliant boundary generator and payload builder.
+  - `MultipartFile`: In-memory file container with custom MIME types.
+  - `file_from_path()`: Automatic disk file loader using `nox.fs.read_to_string`.
+  - `Client.post_multipart()` and `nova.post_multipart()` convenience APIs.
+- **Retry-After Header Support**:
+  - Respects HTTP 429 / 503 `Retry-After` header in seconds per AGENTS.md §13.
+- **Multipart Test Suite**:
+  - `tests/unit/multipart_test.nox`: Unit verification for boundary framing and file loaders.
+  - `tests/integration/multipart_integration_test.nox`: Live multipart upload against httpbin.
+- **New Example**:
+  - `examples/multipart_upload.nox`.
+
 ## [0.1.0] - 2026-10-26
 
 ### Added

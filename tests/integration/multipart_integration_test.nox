@@ -1,0 +1,27 @@
+# tests/integration/multipart_integration_test.nox — Live multipart form & file upload against httpbin.
+
+import nox.test
+import nova
+from nova import Client, Response
+import multipart
+from multipart import MultipartEncoder, MultipartFile
+
+cli: Client = Client("https://httpbin.org")
+
+# 1. Build multipart encoder with fields and file
+enc: MultipartEncoder = MultipartEncoder()
+enc.add_field("description", "Testing Nova multipart file upload")
+enc.add_field("author", "nox-community")
+
+file_part: MultipartFile = MultipartFile("uploaded_doc", "invoice.txt", "Invoice #10293 Paid In Full", "text/plain")
+enc.add_file(file_part)
+
+# 2. Execute multipart POST
+resp: Response = cli.post_multipart("/post", enc)
+
+nox.test.assert_eq_int(resp.status_code, 200, "multipart POST status is 200")
+nox.test.assert_true(resp.is_success(), "multipart POST is_success")
+nox.test.assert_true("Testing Nova multipart file upload" in resp.body, "form field reflected by server")
+nox.test.assert_true("Invoice #10293 Paid In Full" in resp.body, "file content reflected by server")
+
+print("multipart_integration_test passed")

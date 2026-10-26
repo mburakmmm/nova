@@ -18,8 +18,11 @@ import request
 from request import Request
 import transport
 from transport import TransportAdapter
+import multipart
+from multipart import MultipartEncoder, MultipartFile, file_from_path
 import errors
 from errors import RetryExhaustedError, TransportError, UnsupportedFeatureError
+import nox.strings
 
 class Client:
     base_url: str
@@ -89,6 +92,15 @@ class Client:
                     if pol.should_retry_status(req.method, attempt, res.status_code):
                         attempt = attempt + 1
                         delay: int = pol.calculate_delay_ms(attempt)
+                        # Respect Retry-After header if present (AGENTS.md §13)
+                        retry_after_str: str = res.headers.get("Retry-After", "")
+                        if len(retry_after_str) > 0:
+                            try:
+                                secs: int = int(nox.strings.trim(retry_after_str))
+                                if secs > 0:
+                                    delay = secs * 1000
+                            except ValueError as ve:
+                                pass
                         nox.time.sleep_ms(delay)
                         continue
 
@@ -188,6 +200,20 @@ class Client:
             for k in headers:
                 form_headers[k] = headers[k]
         return self.request("POST", url, encoded_form, "", params, form_headers)
+
+    def post_multipart(
+        self: Client,
+        url: str,
+        encoder: MultipartEncoder,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None
+    ) -> Response:
+        body: str = encoder.build()
+        mp_headers: dict[str, str] = {"Content-Type": encoder.content_type()}
+        if headers is not None:
+            for k in headers:
+                mp_headers[k] = headers[k]
+        return self.request("POST", url, body, "", params, mp_headers)
 
     def put(
         self: Client,

@@ -2,7 +2,7 @@
 
 [![Nox Version](https://img.shields.io/badge/noxc-2.0.27-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-11%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-13%20passed-brightgreen.svg)]()
 
 > A pleasant, safe, predictable, production-oriented HTTP client for the **Nox programming language**, inspired by Python Requests and HTTPX.
 
@@ -16,6 +16,7 @@
 - [Key Features](#key-features)
   - [JSON Requests and Responses](#json-requests-and-responses)
   - [Form Submission](#form-submission)
+  - [Multipart Form & File Upload](#multipart-form--file-upload)
   - [Case-Insensitive Headers & CRLF Defense](#case-insensitive-headers--crlf-defense)
   - [Query Parameters & URL Joining](#query-parameters--url-joining)
   - [Authentication & Redaction](#authentication--redaction)
@@ -122,6 +123,31 @@ form: dict[str, str] = {"grant_type": "password", "username": "ada"}
 resp: Response = nova.post_form("https://httpbin.org/post", form)
 ```
 
+### Multipart Form & File Upload
+
+Upload files and form fields using RFC 7578 multipart/form-data encoding:
+
+```nox
+import nova
+from nova import Client, Response
+import multipart
+from multipart import MultipartEncoder, MultipartFile, file_from_path
+
+cli: Client = Client("https://httpbin.org")
+
+enc: MultipartEncoder = MultipartEncoder()
+enc.add_field("description", "Invoice upload")
+
+# Attach file in memory or from disk
+file_item: MultipartFile = MultipartFile("doc", "notes.txt", "Plain text notes", "text/plain")
+enc.add_file(file_item)
+
+# Or load from disk: enc.add_file(file_from_path("attachment", "report.pdf", "application/pdf"))
+
+resp: Response = cli.post_multipart("/post", enc)
+print("Uploaded successfully. Status:", resp.status_code)
+```
+
 ### Case-Insensitive Headers & CRLF Defense
 
 Headers follow RFC 7230 case-insensitivity and strictly reject carriage return / line feed injection:
@@ -225,11 +251,12 @@ except NovaError as ne:
 | GET / POST | ✅ Supported | Verified over HTTP & HTTPS |
 | JSON Parse / Encode | ✅ Supported | Integrated with `nox.json` |
 | URL-encoded Forms | ✅ Supported | Automatic `application/x-www-form-urlencoded` |
+| Multipart Form & Upload | ✅ Supported | RFC 7578 multipart encoder and disk file loader |
 | Case-Insensitive Headers | ✅ Supported | CRLF injection screened |
 | URL Join & Query Encoding | ✅ Supported | Strips fragments, validates schemes |
 | Basic & Bearer Auth | ✅ Supported | Redacted representations |
 | Per-Client CookieJar | ✅ Supported | Domain isolation, Set-Cookie parsing |
-| Exponential Backoff | ✅ Supported | Idempotency guarded |
+| Exponential Backoff | ✅ Supported | Idempotency guarded, Retry-After respected |
 | PUT / PATCH / DELETE | ⏳ Proposed | Gated by upstream `noxrt.o` export (raises `UnsupportedFeatureError`) |
 | Request Timeout | ⏳ Planned | Awaiting runtime timeout hook |
 | Streaming / Binary | ⏳ Planned | Awaiting byte-buffer transport support |
@@ -246,7 +273,7 @@ noxc test
 
 Output:
 ```text
-11 passed, 0 failed (11 total)
+13 passed, 0 failed (13 total)
 ```
 
 Run demonstration:

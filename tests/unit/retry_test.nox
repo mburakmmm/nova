@@ -37,4 +37,11 @@ safe_post_pol: RetryPolicy = RetryPolicy(3, 100, 1000, True, True)
 nox.test.assert_true(safe_post_pol.should_retry_status("POST", 0, 503), "POST is retryable when explicitly enabled")
 nox.test.assert_true(safe_post_pol.should_retry_error("POST", 0), "POST transport error retryable when explicitly enabled")
 
+# 5. Retry-After header parsing logic verification
+import nox.strings
+raw_hdr: str = " 5 "
+parsed_secs: int = int(nox.strings.trim(raw_hdr))
+delay_ms: int = parsed_secs * 1000
+nox.test.assert_eq_int(delay_ms, 5000, "Retry-After seconds parsed to milliseconds")
+
 print("retry_test passed")

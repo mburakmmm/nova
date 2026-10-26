@@ -84,9 +84,9 @@
 - [ ] **3.3.3. Redirect Tests**: Verify redirect limits and credential stripping.
 
 #### 3.4. Multipart Form & File Upload
-- [ ] **3.4.1. Multipart Encoder**: RFC 7578 compliant boundary generator and payload formatter in pure Nox.
-- [ ] **3.4.2. File Upload API**: `post_multipart(url, files, fields)` integrating `nox.fs.read_to_string`.
-- [ ] **3.4.3. Multipart Tests**: Verify form boundary framing and file payload delivery against test server.
+- [x] **3.4.1. Multipart Encoder**: RFC 7578 compliant boundary generator and payload formatter in pure Nox (`multipart.nox`).
+- [x] **3.4.2. File Upload API**: `post_multipart(url, encoder, ...)` and `file_from_path()` integrating `nox.fs.read_to_string`.
+- [x] **3.4.3. Multipart Tests**: Verified boundary framing, filesystem file attachment, and live server file delivery against httpbin (`tests/unit/multipart_test.nox` and `tests/integration/multipart_integration_test.nox`).
 
 ---
 

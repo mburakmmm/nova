@@ -18,6 +18,8 @@ import request
 from request import Request
 import transport
 from transport import TransportAdapter
+import multipart
+from multipart import MultipartEncoder, MultipartFile, file_from_path
 import client
 from client import Client
 
@@ -56,6 +58,15 @@ def post_form(
 ) -> Response:
     c: Client = Client()
     return c.post_form(url_target, data, params, headers_dict)
+
+def post_multipart(
+    url_target: str,
+    encoder: MultipartEncoder,
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None
+) -> Response:
+    c: Client = Client()
+    return c.post_multipart(url_target, encoder, params, headers_dict)
 
 def put(
     url_target: str,

@@ -1,0 +1,28 @@
+# examples/multipart_upload.nox — Uploading files and form data using multipart/form-data.
+
+import nova
+from nova import Client, Response
+import multipart
+from multipart import MultipartEncoder, MultipartFile
+
+cli: Client = Client("https://httpbin.org")
+
+enc: MultipartEncoder = MultipartEncoder()
+enc.add_field("user_id", "4040")
+enc.add_field("document_type", "receipt")
+
+# In-memory file attachment
+file_item: MultipartFile = MultipartFile(
+    "attachment",
+    "receipt.txt",
+    "Item 1: 45 USD\nItem 2: 15 USD\nTotal: 60 USD",
+    "text/plain"
+)
+enc.add_file(file_item)
+
+print("Posting multipart form data...")
+resp: Response = cli.post_multipart("/post", enc)
+
+print("Status:", resp.status_code)
+print("Is success:", resp.is_success())
+print("Server received fields and files.")
