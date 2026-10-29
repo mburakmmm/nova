@@ -131,7 +131,7 @@ from nova import SSRFPolicy
 ### Constructor
 `SSRFPolicy(allow_private: bool = False, allow_loopback: bool = False, allow_link_local: bool = False)`
 
-- `validate_url(url_str: str) -> None`: Validates target host and scheme. Raises `SSRFSecurityError` if the destination targets restricted IP ranges (IPv4/IPv6 private, loopback, link-local, cloud metadata `169.254.169.254`, IPv4-mapped IPv6, or dangerous hostnames).
+- `validate_target(url_str: str) -> None`: Validates target host and scheme. Raises `SSRFSecurityError` if the destination targets restricted IP ranges (IPv4/IPv6 private, loopback, link-local, cloud metadata `169.254.169.254`, IPv4-mapped IPv6, or dangerous hostnames).
 
 ---
 

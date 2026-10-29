@@ -1,0 +1,66 @@
+# benchmarks/bench_nova.nox — Microbenchmarks for Nova HTTP client components.
+
+import nova
+from nova import Client, Headers, SSRFPolicy, resolve_url, MultipartEncoder
+import nox.time
+
+def bench_url_resolution(iterations: int) -> int:
+    t0: nox.time.Instant = nox.time.instant_now()
+    i: int = 0
+    params: dict[str, str] = {"search": "nox language", "page": "1", "limit": "50"}
+    while i < iterations:
+        url: str = resolve_url("https://api.example.com/v1", "/users", params)
+        i = i + 1
+    return t0.elapsed_ms()
+
+def bench_headers_case_insensitivity(iterations: int) -> int:
+    t0: nox.time.Instant = nox.time.instant_now()
+    h: Headers = Headers()
+    h.set("Content-Type", "application/json")
+    h.set("Authorization", "Bearer secret_token_123")
+    h.set("X-Custom-Tracking-Id", "track_abcdef_987654")
+
+    i: int = 0
+    while i < iterations:
+        v1: str = h.get("content-type")
+        v2: str = h.get("AUTHORIZATION")
+        v3: str = h.get("x-custom-tracking-id")
+        i = i + 1
+    return t0.elapsed_ms()
+
+def bench_ssrf_validation(iterations: int) -> int:
+    t0: nox.time.Instant = nox.time.instant_now()
+    policy: SSRFPolicy = SSRFPolicy()
+    i: int = 0
+    while i < iterations:
+        policy.validate_target("https://api.example.com/v1/resource")
+        i = i + 1
+    return t0.elapsed_ms()
+
+def bench_multipart_encoding(iterations: int) -> int:
+    t0: nox.time.Instant = nox.time.instant_now()
+    i: int = 0
+    while i < iterations:
+        enc: MultipartEncoder = MultipartEncoder()
+        enc.add_field("user", "test_user")
+        enc.add_field("description", "A benchmark test field")
+        payload: str = enc.build()
+        i = i + 1
+    return t0.elapsed_ms()
+
+print("=== Nova Microbenchmark Suite ===")
+n: int = 10000
+
+t_url: int = bench_url_resolution(n)
+print("1. URL Resolution & Query Encoding (" + str(n) + " ops): " + str(t_url) + " ms (" + str(float(t_url) / float(n) * 1000.0) + " us/op)")
+
+t_hdr: int = bench_headers_case_insensitivity(n)
+print("2. Case-Insensitive Header Lookup (" + str(n * 3) + " lookups): " + str(t_hdr) + " ms (" + str(float(t_hdr) / float(n * 3) * 1000.0) + " us/op)")
+
+t_ssrf: int = bench_ssrf_validation(n)
+print("3. SSRF Policy URL Validation (" + str(n) + " ops): " + str(t_ssrf) + " ms (" + str(float(t_ssrf) / float(n) * 1000.0) + " us/op)")
+
+t_mp: int = bench_multipart_encoding(1000)
+print("4. Multipart MIME Framing (1000 builds): " + str(t_mp) + " ms (" + str(float(t_mp) / 1000.0 * 1000.0) + " us/op)")
+
+print("=== Benchmark Finished Successfully ===")
