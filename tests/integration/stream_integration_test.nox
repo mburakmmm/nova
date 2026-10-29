@@ -1,0 +1,27 @@
+# tests/integration/stream_integration_test.nox — Live stream integration against httpbin stream endpoints.
+
+import nox.test
+import client
+from client import Client
+import stream
+from stream import StreamResponse
+
+cli: Client = Client("https://httpbin.org")
+
+# Stream 5 lines from httpbin /stream/5
+s_resp: StreamResponse = cli.stream("GET", "/stream/5")
+nox.test.assert_eq_int(s_resp.status_code, 200, "stream endpoint status is 200")
+nox.test.assert_true(s_resp.is_success(), "stream is_success is true")
+
+# Read chunks
+c1: str = s_resp.read_chunk(100)
+nox.test.assert_true(len(c1) > 0, "first chunk has data")
+
+# Iterate remaining lines
+all_text: str = s_resp.read_all()
+nox.test.assert_true(len(all_text) > 0, "remaining stream read")
+
+s_resp.close()
+nox.test.assert_true(s_resp.is_closed, "stream closed successfully")
+
+print("stream_integration_test passed")

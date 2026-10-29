@@ -1,0 +1,19 @@
+# examples/ssrf_shield.nox — SSRF protection shield demonstration.
+
+import nova
+from nova import Client, SSRFPolicy, Response
+import errors
+from errors import SSRFSecurityError
+
+cli: Client = Client()
+cli.set_ssrf_policy(SSRFPolicy())
+
+try:
+    print("Attempting request to AWS/GCP cloud metadata endpoint...")
+    resp: Response = cli.get("http://169.254.169.254/latest/meta-data")
+except SSRFSecurityError as err:
+    print("SSRF Protection activated! Blocked malicious destination:", err.message)
+
+print("Safe request to public internet...")
+safe_resp: Response = cli.get("https://httpbin.org/get")
+print("Safe request status:", safe_resp.status_code)

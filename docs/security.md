@@ -53,3 +53,15 @@ When following redirects across different origins (`not is_same_origin(req.url, 
 
 When handling HTTP 429 / 503 responses with a `Retry-After` header:
 - The delay is capped to the policy's `max_backoff_ms` (default 30,000 ms), preventing malicious or misconfigured servers from causing client denial of service through multi-year sleep delays.
+
+## 10. SSRF Protection Shield (Defense in Depth)
+
+Server-Side Request Forgery (SSRF) occurs when an application fetches a remote resource based on user-supplied URLs without restricting access to internal networks.
+
+Nova provides a native `SSRFPolicy` shield that validates destination URLs both before the initial request and upon every HTTP redirect:
+- **Private IPv4 Blocklist (RFC 1918)**: Blocks `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`.
+- **Loopback & Zero Networks**: Blocks `127.0.0.0/8`, `0.0.0.0/8`, and `localhost` (`*.localhost`).
+- **Cloud Metadata & Link-Local**: Blocks AWS/GCP/Azure link-local metadata address `169.254.169.254` and `169.254.0.0/16`, as well as hostnames `metadata.google.internal` and `instance-data`.
+- **IPv6 Restricted Ranges**: Blocks IPv6 loopback (`::1`), link-local (`fe80::/10`), unique local addresses (`fc00::/7`), and IPv4-mapped IPv6 evasion attempts (e.g. `::ffff:127.0.0.1` and `::ffff:169.254.169.254`).
+- **Carrier-Grade NAT & Multicast**: Blocks `100.64.0.0/10` and `224.0.0.0/4+`.
+- **Redirect Destination Enforcement**: If an external server redirects to an internal or cloud metadata endpoint, Nova catches and blocks the redirected URL before any connection is made, raising `SSRFSecurityError`.

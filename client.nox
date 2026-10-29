@@ -20,6 +20,10 @@ import transport
 from transport import TransportAdapter
 import multipart
 from multipart import MultipartEncoder, MultipartFile, file_from_path
+import ssrf
+from ssrf import SSRFPolicy
+import stream
+from stream import StreamResponse
 import errors
 from errors import RetryExhaustedError, TransportError, UnsupportedFeatureError
 import nox.strings
@@ -57,6 +61,7 @@ class Client:
     raise_on_status: bool
     max_redirects: int
     timeout_ms: int
+    ssrf_policy: SSRFPolicy | None
     transport: TransportAdapter
 
     def __init__(
@@ -64,11 +69,12 @@ class Client:
         base_url: str = "",
         raise_for_status: bool = False,
         max_redirects: int = 5,
-        timeout_ms: int = 0
+        timeout_ms: int = 0,
+        ssrf_policy: SSRFPolicy | None = None
     ) -> None:
         self.base_url = base_url
         self.default_headers = Headers()
-        self.default_headers.set("User-Agent", "Nova/0.3.0")
+        self.default_headers.set("User-Agent", "Nova/0.4.0")
         self.default_headers.set("Accept", "*/*")
         self.basic_auth = None
         self.bearer_auth = None
@@ -77,7 +83,12 @@ class Client:
         self.raise_on_status = raise_for_status
         self.max_redirects = max_redirects
         self.timeout_ms = timeout_ms
+        self.ssrf_policy = ssrf_policy
         self.transport = TransportAdapter()
+
+    def set_ssrf_policy(self: Client, policy: SSRFPolicy) -> Client:
+        self.ssrf_policy = policy
+        return self
 
     def set_timeout(self: Client, timeout_ms: int) -> Client:
         self.timeout_ms = timeout_ms
@@ -111,6 +122,11 @@ class Client:
         return self
 
     def send(self: Client, req: Request) -> Response:
+        # Validate SSRF defense policy on initial request target
+        s_pol: SSRFPolicy | None = self.ssrf_policy
+        if s_pol is not None:
+            s_pol.validate_target(req.url)
+
         pol: RetryPolicy | None = self.retry_policy
         current_req: Request = req
         redirect_count: int = 0
@@ -170,6 +186,10 @@ class Client:
                     redirect_count = redirect_count + 1
                     loc: str = final_res.headers.get("Location")
                     next_url: str = resolve_url(current_req.url, loc)
+
+                    # Validate SSRF defense policy on redirect target (prevents open-redirect SSRF bypasses)
+                    if s_pol is not None:
+                        s_pol.validate_target(next_url)
 
                     same_origin: bool = is_same_origin(current_req.url, next_url)
                     next_headers: Headers = current_req.headers.clone()
@@ -357,3 +377,15 @@ class Client:
         timeout_ms: int = -1
     ) -> Response:
         return self.request("OPTIONS", url, "", "", params, headers, timeout_ms)
+
+    def stream(
+        self: Client,
+        method: str,
+        url: str,
+        body: str = "",
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
+    ) -> StreamResponse:
+        res: Response = self.request(method, url, body, "", params, headers, timeout_ms)
+        return StreamResponse(res.status_code, res.headers, res.url, res.method, res.body)

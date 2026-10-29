@@ -1,0 +1,23 @@
+import nova
+import response
+from response import Response
+import nox.test
+
+async def fetch_get() -> Response:
+    return nova.get("https://httpbin.org/get")
+
+async def fetch_status() -> Response:
+    return nova.get("https://httpbin.org/status/200")
+
+t1: Task[Response] = spawn fetch_get()
+t2: Task[Response] = spawn fetch_status()
+
+r1: Response = await t1
+r2: Response = await t2
+
+nox.test.assert_eq_int(r1.status_code, 200, "async get status 200")
+nox.test.assert_eq_int(r2.status_code, 200, "async status 200")
+nox.test.assert_true(r1.elapsed_ms >= 0, "r1 has elapsed duration")
+nox.test.assert_true(r2.elapsed_ms >= 0, "r2 has elapsed duration")
+
+print("async_concurrency_test passed")

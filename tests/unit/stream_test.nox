@@ -1,0 +1,58 @@
+# tests/unit/stream_test.nox — Test StreamResponse chunked reading, line iteration, and closure.
+
+import nox.test
+import stream
+from stream import StreamResponse
+import headers
+from headers import Headers
+import client
+from client import Client
+import nox.buffer
+from nox.buffer import Buffer
+
+h: Headers = Headers()
+h.set("Content-Type", "text/plain")
+
+payload: str = "line1\nline2\nline3\nline4"
+s_resp: StreamResponse = StreamResponse(200, h, "https://example.com/stream", "GET", payload)
+
+# 1. Status checks
+nox.test.assert_true(s_resp.is_success(), "stream response is_success is true")
+nox.test.assert_true(not s_resp.is_error(), "stream response is_error is false")
+
+# 2. Chunk reading
+c1: str = s_resp.read_chunk(5)
+nox.test.assert_eq_str(c1, "line1", "first chunk matches")
+
+c2: str = s_resp.read_chunk(6)
+nox.test.assert_eq_str(c2, "\nline2", "second chunk matches")
+
+# 3. Read remaining
+rem: str = s_resp.read_all()
+nox.test.assert_eq_str(rem, "\nline3\nline4", "remaining stream content read")
+
+# 4. End of stream returns empty
+c_end: str = s_resp.read_chunk(10)
+nox.test.assert_eq_str(c_end, "", "end of stream chunk is empty")
+
+# 5. Line iteration
+s_resp2: StreamResponse = StreamResponse(200, h, "https://example.com/lines", "GET", payload)
+lines: list[str] = s_resp2.iter_lines()
+nox.test.assert_eq_int(len(lines), 4, "split into 4 lines")
+nox.test.assert_eq_str(lines[0], "line1", "first line is line1")
+nox.test.assert_eq_str(lines[3], "line4", "fourth line is line4")
+
+# 6. Byte chunking (Buffer)
+s_resp3: StreamResponse = StreamResponse(200, h, "https://example.com/bytes", "GET", "ABCDEFGH")
+chunks: list[Buffer] = s_resp3.iter_bytes(3)
+nox.test.assert_eq_int(len(chunks), 3, "3 chunks of size 3, 3, 2")
+nox.test.assert_eq_int(chunks[0].len(), 3, "first buffer len is 3")
+nox.test.assert_eq_int(chunks[1].len(), 3, "second buffer len is 3")
+nox.test.assert_eq_int(chunks[2].len(), 2, "third buffer len is 2")
+
+# 7. Close stops reading
+s_resp3.close()
+nox.test.assert_true(s_resp3.is_closed, "stream marked closed")
+nox.test.assert_eq_str(s_resp3.read_chunk(10), "", "read on closed stream returns empty")
+
+print("stream_test passed")

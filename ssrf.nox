@@ -1,0 +1,199 @@
+# ssrf.nox — Server-Side Request Forgery (SSRF) defense shield per AGENTS.md §17.
+
+import nox.strings
+import nox.url
+from nox.url import URL
+import errors
+from errors import SSRFSecurityError
+
+def _is_all_digits(s: str) -> bool:
+    if len(s) == 0:
+        return False
+    i: int = 0
+    n: int = len(s)
+    while i < n:
+        b: int = nox.strings.byte_at(s, i)
+        if b < 48 or b > 57:
+            return False
+        i = i + 1
+    return True
+
+class IPv4Address:
+    is_valid: bool
+    o1: int
+    o2: int
+    o3: int
+    o4: int
+
+    def __init__(self: IPv4Address, is_valid: bool, o1: int = 0, o2: int = 0, o3: int = 0, o4: int = 0) -> None:
+        self.is_valid = is_valid
+        self.o1 = o1
+        self.o2 = o2
+        self.o3 = o3
+        self.o4 = o4
+
+def parse_ipv4(host: str) -> IPv4Address:
+    parts: list[str] = nox.strings.split(host, ".")
+    if len(parts) != 4:
+        return IPv4Address(False)
+
+    i: int = 0
+    while i < 4:
+        if not _is_all_digits(parts[i]):
+            return IPv4Address(False)
+        i = i + 1
+
+    v1: int = int(parts[0])
+    v2: int = int(parts[1])
+    v3: int = int(parts[2])
+    v4: int = int(parts[3])
+
+    if v1 < 0 or v1 > 255 or v2 < 0 or v2 > 255 or v3 < 0 or v3 > 255 or v4 < 0 or v4 > 255:
+        return IPv4Address(False)
+
+    return IPv4Address(True, v1, v2, v3, v4)
+
+class SSRFPolicy:
+    allow_private: bool
+    allow_loopback: bool
+    allow_link_local: bool
+    blocked_hosts: list[str]
+    allowed_hosts: list[str]
+
+    def __init__(
+        self: SSRFPolicy,
+        allow_private: bool = False,
+        allow_loopback: bool = False,
+        allow_link_local: bool = False
+    ) -> None:
+        self.allow_private = allow_private
+        self.allow_loopback = allow_loopback
+        self.allow_link_local = allow_link_local
+        self.blocked_hosts = []
+        self.allowed_hosts = []
+
+    def block_host(self: SSRFPolicy, host: str) -> SSRFPolicy:
+        blist: list[str] = self.blocked_hosts
+        blist.append(nox.strings.lower(host))
+        self.blocked_hosts = blist
+        return self
+
+    def allow_host(self: SSRFPolicy, host: str) -> SSRFPolicy:
+        alist: list[str] = self.allowed_hosts
+        alist.append(nox.strings.lower(host))
+        self.allowed_hosts = alist
+        return self
+
+    def is_host_allowed_explicitly(self: SSRFPolicy, host_lower: str) -> bool:
+        i: int = 0
+        while i < len(self.allowed_hosts):
+            if self.allowed_hosts[i] == host_lower:
+                return True
+            i = i + 1
+        return False
+
+    def is_host_blocked_explicitly(self: SSRFPolicy, host_lower: str) -> bool:
+        i: int = 0
+        while i < len(self.blocked_hosts):
+            if self.blocked_hosts[i] == host_lower:
+                return True
+            i = i + 1
+        return False
+
+    def validate_target(self: SSRFPolicy, target_url: str) -> None:
+        u: URL = nox.url.parse(target_url)
+        raw_host: str = u.host
+        host_lower: str = nox.strings.lower(raw_host)
+
+        # Strip IPv6 brackets if present
+        if nox.strings.starts_with(host_lower, "[") and nox.strings.ends_with(host_lower, "]"):
+            host_lower = host_lower[1:len(host_lower) - 1]
+
+        # 1. Explicit allowlist check
+        if self.is_host_allowed_explicitly(host_lower):
+            return
+
+        # 2. Explicit blocklist check
+        if self.is_host_blocked_explicitly(host_lower):
+            raise SSRFSecurityError(target_url, raw_host, "Host is in explicit SSRF blocklist: " + raw_host)
+
+        # 3. Known dangerous hostnames & Cloud Metadata names
+        if host_lower == "localhost" or nox.strings.ends_with(host_lower, ".localhost"):
+            if not self.allow_loopback:
+                raise SSRFSecurityError(target_url, raw_host, "Access to localhost is blocked by SSRF policy")
+
+        if host_lower == "metadata.google.internal" or host_lower == "instance-data":
+            if not self.allow_link_local:
+                raise SSRFSecurityError(target_url, raw_host, "Access to cloud metadata service is blocked by SSRF policy")
+
+        # 4. IPv4 Literal checks
+        ip: IPv4Address = parse_ipv4(host_lower)
+        if ip.is_valid:
+            # Loopback: 127.0.0.0/8 or 0.0.0.0/8
+            if ip.o1 == 127 or ip.o1 == 0:
+                if not self.allow_loopback:
+                    raise SSRFSecurityError(target_url, raw_host, "Loopback address blocked by SSRF policy: " + raw_host)
+
+            # Link-Local / Cloud Instance Metadata: 169.254.0.0/16 (e.g. 169.254.169.254)
+            if ip.o1 == 169 and ip.o2 == 254:
+                if not self.allow_link_local:
+                    raise SSRFSecurityError(target_url, raw_host, "Link-local / cloud metadata address blocked by SSRF policy: " + raw_host)
+
+            # Private RFC 1918:
+            # 10.0.0.0/8
+            # 172.16.0.0/12 (172.16.x.x - 172.31.x.x)
+            # 192.168.0.0/16
+            is_priv: bool = False
+            if ip.o1 == 10:
+                is_priv = True
+            elif ip.o1 == 172 and ip.o2 >= 16 and ip.o2 <= 31:
+                is_priv = True
+            elif ip.o1 == 192 and ip.o2 == 168:
+                is_priv = True
+            elif ip.o1 == 100 and ip.o2 >= 64 and ip.o2 <= 127: # Carrier-grade NAT RFC 6598
+                is_priv = True
+
+            if is_priv and not self.allow_private:
+                raise SSRFSecurityError(target_url, raw_host, "Private RFC 1918 IP address blocked by SSRF policy: " + raw_host)
+
+            # Multicast / Reserved
+            if ip.o1 >= 224 and not self.allow_private:
+                raise SSRFSecurityError(target_url, raw_host, "Multicast or reserved IP address blocked by SSRF policy: " + raw_host)
+
+        # 5. IPv6 Literal checks
+        if nox.strings.index_of(host_lower, ":") >= 0:
+            # Loopback: ::1 or 0:0:0:0:0:0:0:1
+            if host_lower == "::1" or host_lower == "0:0:0:0:0:0:0:1" or host_lower == "::":
+                if not self.allow_loopback:
+                    raise SSRFSecurityError(target_url, raw_host, "IPv6 loopback address blocked by SSRF policy: " + raw_host)
+
+            # Link-Local: fe80::/10 (fe8, fe9, fea, feb)
+            if (
+                nox.strings.starts_with(host_lower, "fe8") or
+                nox.strings.starts_with(host_lower, "fe9") or
+                nox.strings.starts_with(host_lower, "fea") or
+                nox.strings.starts_with(host_lower, "feb")
+            ):
+                if not self.allow_link_local:
+                    raise SSRFSecurityError(target_url, raw_host, "IPv6 link-local address blocked by SSRF policy: " + raw_host)
+
+            # Unique Local: fc00::/7 (fc or fd)
+            if nox.strings.starts_with(host_lower, "fc") or nox.strings.starts_with(host_lower, "fd"):
+                if not self.allow_private:
+                    raise SSRFSecurityError(target_url, raw_host, "IPv6 unique local address blocked by SSRF policy: " + raw_host)
+
+            # IPv4-mapped IPv6: ::ffff:127.0.0.1 or ::ffff:169.254.169.254
+            if nox.strings.starts_with(host_lower, "::ffff:"):
+                mapped_v4: str = host_lower[7:]
+                mapped_ip: IPv4Address = parse_ipv4(mapped_v4)
+                if mapped_ip.is_valid:
+                    if mapped_ip.o1 == 127 and not self.allow_loopback:
+                        raise SSRFSecurityError(target_url, raw_host, "IPv4-mapped loopback blocked by SSRF policy: " + raw_host)
+                    if mapped_ip.o1 == 169 and mapped_ip.o2 == 254 and not self.allow_link_local:
+                        raise SSRFSecurityError(target_url, raw_host, "IPv4-mapped metadata blocked by SSRF policy: " + raw_host)
+                    if (
+                        (mapped_ip.o1 == 10) or
+                        (mapped_ip.o1 == 172 and mapped_ip.o2 >= 16 and mapped_ip.o2 <= 31) or
+                        (mapped_ip.o1 == 192 and mapped_ip.o2 == 168)
+                    ) and not self.allow_private:
+                        raise SSRFSecurityError(target_url, raw_host, "IPv4-mapped private IP blocked by SSRF policy: " + raw_host)

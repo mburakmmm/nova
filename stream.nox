@@ -1,0 +1,97 @@
+# stream.nox — Streaming response model and chunked reader per AGENTS.md §16.
+
+import headers
+from headers import Headers
+import errors
+from errors import HttpStatusError, DecodeError
+import url
+from url import sanitize_url
+import nox.bytes
+from nox.buffer import Buffer
+import nox.strings
+
+class StreamResponse:
+    status_code: int
+    headers: Headers
+    url: str
+    method: str
+    raw_body: str
+    cursor: int
+    is_closed: bool
+
+    def __init__(
+        self: StreamResponse,
+        status_code: int,
+        headers: Headers,
+        url: str,
+        method: str,
+        raw_body: str = ""
+    ) -> None:
+        self.status_code = status_code
+        self.headers = headers
+        self.url = url
+        self.method = method
+        self.raw_body = raw_body
+        self.cursor = 0
+        self.is_closed = False
+
+    def is_success(self: StreamResponse) -> bool:
+        return self.status_code >= 200 and self.status_code <= 299
+
+    def is_error(self: StreamResponse) -> bool:
+        return self.status_code >= 400
+
+    def raise_for_status(self: StreamResponse) -> None:
+        if self.is_error():
+            safe: str = sanitize_url(self.url)
+            msg: str = "HTTP " + str(self.status_code) + " error for url: " + safe
+            raise HttpStatusError(self.status_code, self.url, msg)
+
+    def read_chunk(self: StreamResponse, chunk_size: int = 4096) -> str:
+        if self.is_closed:
+            return ""
+        if chunk_size <= 0:
+            chunk_size = 4096
+
+        total: int = len(self.raw_body)
+        if self.cursor >= total:
+            return ""
+
+        end_pos: int = self.cursor + chunk_size
+        if end_pos > total:
+            end_pos = total
+
+        chunk: str = self.raw_body[self.cursor:end_pos]
+        self.cursor = end_pos
+        return chunk
+
+    def read_chunk_bytes(self: StreamResponse, chunk_size: int = 4096) -> Buffer:
+        chunk_str: str = self.read_chunk(chunk_size)
+        return nox.bytes.from_str(chunk_str)
+
+    def iter_bytes(self: StreamResponse, chunk_size: int = 4096) -> list[Buffer]:
+        chunks: list[Buffer] = []
+        while True:
+            b: Buffer = self.read_chunk_bytes(chunk_size)
+            if b.len() == 0:
+                break
+            chunks.append(b)
+        return chunks
+
+    def iter_lines(self: StreamResponse) -> list[str]:
+        if self.is_closed:
+            return []
+        lines: list[str] = nox.strings.split(self.raw_body, "\n")
+        self.cursor = len(self.raw_body)
+        return lines
+
+    def read_all(self: StreamResponse) -> str:
+        if self.is_closed:
+            return ""
+        remaining: str = self.raw_body[self.cursor:]
+        self.cursor = len(self.raw_body)
+        return remaining
+
+    def close(self: StreamResponse) -> None:
+        self.is_closed = True
+        self.cursor = len(self.raw_body)

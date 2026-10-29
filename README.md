@@ -2,7 +2,7 @@
 
 [![Nox Version](https://img.shields.io/badge/noxc-2.0.63-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-18%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-22%20passed-brightgreen.svg)]()
 
 > A pleasant, safe, predictable, production-oriented HTTP client for the **Nox programming language**, inspired by Python Requests and HTTPX.
 
@@ -15,13 +15,17 @@
 - [Quick Start](#quick-start)
 - [Key Features](#key-features)
   - [JSON Requests and Responses](#json-requests-and-responses)
+  - [Streaming Response Reader](#streaming-response-reader)
+  - [SSRF Protection Shield](#ssrf-protection-shield)
   - [Form Submission](#form-submission)
   - [Multipart Form & File Upload](#multipart-form--file-upload)
+  - [Binary Body & Buffer Access](#binary-body--buffer-access)
   - [Case-Insensitive Headers & CRLF Defense](#case-insensitive-headers--crlf-defense)
   - [Query Parameters & URL Joining](#query-parameters--url-joining)
   - [Authentication & Redaction](#authentication--redaction)
   - [Cookie Management](#cookie-management)
   - [Retry Policy & Exponential Backoff](#retry-policy--exponential-backoff)
+  - [Async Concurrency with Nox Tasks](#async-concurrency-with-nox-tasks)
   - [Error Hierarchy](#error-hierarchy)
 - [Feature Matrix](#feature-matrix)
 - [Running Tests](#running-tests)
@@ -111,6 +115,44 @@ if resp.is_success():
     print("Parsed JSON keys:", nox.json.object_len(data))
 ```
 
+### Streaming Response Reader
+
+Read response data incrementally in chunks, lines, or binary `Buffer` blocks:
+
+```nox
+import nova
+from nova import Client, StreamResponse
+
+cli: Client = Client("https://httpbin.org")
+st: StreamResponse = cli.stream("GET", "/stream/20")
+
+# Process lines incrementally:
+lines: list[str] = st.iter_lines()
+for line in lines:
+    print("Chunk line:", line)
+
+st.close()
+```
+
+### SSRF Protection Shield
+
+Prevent Server-Side Request Forgery by blocking requests to RFC 1918 private IPs, loopback, link-local, cloud metadata (`169.254.169.254`), and IPv4-mapped IPv6 evasion attempts on both initial requests and redirect hops:
+
+```nox
+import nova
+from nova import Client, SSRFPolicy
+from errors import SSRFSecurityError
+
+cli: Client = Client()
+cli.set_ssrf_policy(SSRFPolicy())
+
+try:
+    # Attempting to fetch cloud metadata is blocked immediately
+    cli.get("http://169.254.169.254/latest/meta-data")
+except SSRFSecurityError as err:
+    print("Blocked malicious destination:", err)
+```
+
 ### Form Submission
 
 Submit URL-encoded forms effortlessly:
@@ -146,6 +188,20 @@ enc.add_file(file_item)
 
 resp: Response = cli.post_multipart("/post", enc)
 print("Uploaded successfully. Status:", resp.status_code)
+```
+
+### Binary Body & Buffer Access
+
+For binary files, images, or payloads with embedded NUL (`\x00`) bytes, access raw byte buffers via `nox.bytes`:
+
+```nox
+import nova
+from nova import Response
+from nox.bytes import Buffer
+
+resp: Response = nova.get("https://httpbin.org/bytes/1024")
+buf: Buffer = resp.bytes()
+print("Downloaded bytes length:", len(buf))
 ```
 
 ### Case-Insensitive Headers & CRLF Defense
@@ -219,6 +275,25 @@ cli: Client = Client("https://httpbin.org")
 cli.set_retry_policy(RetryPolicy(3, 100, 5000))
 ```
 
+### Async Concurrency with Nox Tasks
+
+Nox provides a fiber-based task scheduler with work-stealing threads (`spawn` and `Task[T]`). You can run multiple requests concurrently without blocking the main fiber:
+
+```nox
+import nova
+from nova import Response
+
+async def fetch_api(endpoint: str) -> Response:
+    return nova.get("https://httpbin.org" + endpoint)
+
+t1: Task[Response] = spawn fetch_api("/get")
+t2: Task[Response] = spawn fetch_api("/status/200")
+
+resp1: Response = await t1
+resp2: Response = await t2
+print("Concurrent requests completed:", resp1.status_code, resp2.status_code)
+```
+
 ### Error Hierarchy
 
 Nova provides an explicit exception taxonomy rooted at `NovaError`:
@@ -260,7 +335,11 @@ except NovaError as ne:
 | PUT / PATCH / DELETE / HEAD / OPTIONS | ✅ Supported | Native stdlib `nox.http.request` transport |
 | Request Timeout | ✅ Supported | True socket timeout (`timeout_ms`) & `TimeoutError` |
 | Binary Body Access | ✅ Supported | Native `Response.bytes() -> Buffer` via `nox.bytes` |
-| Streaming Download / Upload | ⏳ Planned | Phase 4 roadmap |
+| Streaming Response Reader | ✅ Supported | Incremental chunks, `iter_bytes`, `iter_lines` (`StreamResponse`) |
+| SSRF Protection Shield | ✅ Supported | Private IP, link-local, cloud metadata & IPv6 blocklist (`SSRFPolicy`) |
+| Async Concurrency | ✅ Supported | Fiber tasks via Nox runtime (`spawn` / `Task[T]`) |
+| Connection Pooling | ⏳ Planned | Requires native persistent socket pool in runtime |
+| HTTP / SOCKS Proxy | ⏳ Planned | Requires native proxy dialer in runtime |
 
 ---
 
@@ -274,7 +353,7 @@ noxc test
 
 Output:
 ```text
-18 passed, 0 failed (18 total)
+22 passed, 0 failed (22 total)
 ```
 
 Run demonstration:

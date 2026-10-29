@@ -1,0 +1,21 @@
+# examples/streaming.nox — Streaming response demonstration.
+
+import nova
+from nova import Client, StreamResponse
+
+cli: Client = Client("https://httpbin.org")
+
+print("Initiating streaming request...")
+st: StreamResponse = cli.stream("GET", "/stream/5")
+
+print("Status:", st.status_code)
+print("Reading lines from stream:")
+
+lines: list[str] = st.iter_lines()
+idx: int = 1
+for line in lines:
+    print("Line", idx, ":", line)
+    idx = idx + 1
+
+st.close()
+print("Stream finished and closed.")

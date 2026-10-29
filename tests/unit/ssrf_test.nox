@@ -1,0 +1,148 @@
+# tests/unit/ssrf_test.nox — Comprehensive unit tests for SSRF Protection Shield (AGENTS.md §17).
+
+import nox.test
+import ssrf
+from ssrf import SSRFPolicy
+import client
+from client import Client
+import errors
+from errors import SSRFSecurityError
+
+policy: SSRFPolicy = SSRFPolicy()
+
+# 1. Loopback addresses blocked by default
+lb_caught: bool = False
+try:
+    policy.validate_target("http://127.0.0.1/admin")
+except SSRFSecurityError as se:
+    lb_caught = True
+nox.test.assert_true(lb_caught, "127.0.0.1 blocked by SSRF policy")
+
+lb2_caught: bool = False
+try:
+    policy.validate_target("http://127.1.2.3:8080/secret")
+except SSRFSecurityError as se:
+    lb2_caught = True
+nox.test.assert_true(lb2_caught, "127.0.0.0/8 subnet blocked")
+
+lh_caught: bool = False
+try:
+    policy.validate_target("http://localhost/metrics")
+except SSRFSecurityError as se:
+    lh_caught = True
+nox.test.assert_true(lh_caught, "localhost hostname blocked")
+
+lh_sub_caught: bool = False
+try:
+    policy.validate_target("http://foo.localhost/metrics")
+except SSRFSecurityError as se:
+    lh_sub_caught = True
+nox.test.assert_true(lh_sub_caught, "*.localhost blocked")
+
+v6_lb_caught: bool = False
+try:
+    policy.validate_target("http://[::1]:8080/status")
+except SSRFSecurityError as se:
+    v6_lb_caught = True
+nox.test.assert_true(v6_lb_caught, "[::1] IPv6 loopback blocked")
+
+# 2. Cloud Metadata and Link-Local addresses blocked
+meta_ip_caught: bool = False
+try:
+    policy.validate_target("http://169.254.169.254/latest/meta-data/")
+except SSRFSecurityError as se:
+    meta_ip_caught = True
+nox.test.assert_true(meta_ip_caught, "169.254.169.254 cloud metadata blocked")
+
+meta_dns_caught: bool = False
+try:
+    policy.validate_target("http://metadata.google.internal/computeMetadata/v1/")
+except SSRFSecurityError as se:
+    meta_dns_caught = True
+nox.test.assert_true(meta_dns_caught, "metadata.google.internal blocked")
+
+fe80_caught: bool = False
+try:
+    policy.validate_target("http://[fe80::1]/service")
+except SSRFSecurityError as se:
+    fe80_caught = True
+nox.test.assert_true(fe80_caught, "fe80:: link-local blocked")
+
+# 3. RFC 1918 Private IP ranges blocked
+priv10_caught: bool = False
+try:
+    policy.validate_target("http://10.0.0.15/internal/db")
+except SSRFSecurityError as se:
+    priv10_caught = True
+nox.test.assert_true(priv10_caught, "10.0.0.0/8 private network blocked")
+
+priv172_caught: bool = False
+try:
+    policy.validate_target("http://172.20.5.10/admin")
+except SSRFSecurityError as se:
+    priv172_caught = True
+nox.test.assert_true(priv172_caught, "172.16.0.0/12 private network blocked")
+
+priv192_caught: bool = False
+try:
+    policy.validate_target("http://192.168.1.1/router")
+except SSRFSecurityError as se:
+    priv192_caught = True
+nox.test.assert_true(priv192_caught, "192.168.0.0/16 private network blocked")
+
+cgnat_caught: bool = False
+try:
+    policy.validate_target("http://100.64.0.1/api")
+except SSRFSecurityError as se:
+    cgnat_caught = True
+nox.test.assert_true(cgnat_caught, "Carrier-grade NAT (100.64.0.0/10) blocked")
+
+fc00_caught: bool = False
+try:
+    policy.validate_target("http://[fc00::1]/api")
+except SSRFSecurityError as se:
+    fc00_caught = True
+nox.test.assert_true(fc00_caught, "fc00:: unique local IPv6 blocked")
+
+# 4. Public destination allowed without error
+pub_ok: bool = True
+try:
+    policy.validate_target("https://api.github.com/users")
+    policy.validate_target("https://8.8.8.8/dns-query")
+except SSRFSecurityError as se:
+    pub_ok = False
+nox.test.assert_true(pub_ok, "public internet domain and IP allowed")
+
+# 5. Explicit blocklist & allowlist
+custom_pol: SSRFPolicy = SSRFPolicy()
+custom_pol.block_host("badservice.com")
+custom_pol.allow_host("127.0.0.1")
+
+custom_blk_caught: bool = False
+try:
+    custom_pol.validate_target("https://badservice.com/api")
+except SSRFSecurityError as se:
+    custom_blk_caught = True
+nox.test.assert_true(custom_blk_caught, "explicit blocked_host triggers SSRFSecurityError")
+
+custom_allow_ok: bool = True
+try:
+    custom_pol.validate_target("http://127.0.0.1:8080/test")
+except SSRFSecurityError as se:
+    custom_allow_ok = False
+nox.test.assert_true(custom_allow_ok, "explicit allowed_host overrides default block")
+
+# 6. Client integration: Client with SSRF policy intercepts target before sending
+cli: Client = Client("http://127.0.0.1:9999")
+cli.set_ssrf_policy(SSRFPolicy())
+
+client_intercepted: bool = False
+try:
+    cli.get("/secrets")
+except SSRFSecurityError as se:
+    client_intercepted = True
+    nox.test.assert_eq_str(se.blocked_host, "127.0.0.1", "blocked host reported in exception")
+
+nox.test.assert_true(client_intercepted, "Client intercepts SSRF target before sending network request")
+
+print("ssrf_test passed")

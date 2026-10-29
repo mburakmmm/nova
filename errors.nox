@@ -27,6 +27,15 @@ class HttpStatusError(NovaError):
 class InvalidUrlError(NovaError):
     pass
 
+class SSRFSecurityError(NovaError):
+    target_url: str
+    blocked_host: str
+
+    def __init__(self: SSRFSecurityError, target_url: str, blocked_host: str, message: str) -> None:
+        self.target_url = target_url
+        self.blocked_host = blocked_host
+        self.message = message
+
 class InvalidHeaderError(NovaError):
     pass
 

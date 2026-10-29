@@ -7,7 +7,7 @@ from client import Client
 # 1. Defaults
 c1: Client = Client("https://api.example.com")
 nox.test.assert_eq_str(c1.base_url, "https://api.example.com", "base_url set")
-nox.test.assert_eq_str(c1.default_headers.get("User-Agent"), "Nova/0.3.0", "default User-Agent header")
+nox.test.assert_eq_str(c1.default_headers.get("User-Agent"), "Nova/0.4.0", "default User-Agent header")
 nox.test.assert_eq_str(c1.default_headers.get("Accept"), "*/*", "default Accept header")
 nox.test.assert_eq_int(c1.timeout_ms, 0, "default timeout_ms is 0 (unlimited)")
 

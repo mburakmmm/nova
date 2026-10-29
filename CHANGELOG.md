@@ -5,6 +5,34 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-29
+
+### Added — Phase 4 SSRF Protection Shield & Streaming Reader
+- **SSRF Protection Shield (`ssrf.nox`)**:
+  - `SSRFPolicy` defense-in-depth shield enforcing strict origin restrictions.
+  - Blocks RFC 1918 private IPv4 networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).
+  - Blocks loopback (`127.0.0.0/8`, `0.0.0.0/8`, `localhost`, `*.localhost`).
+  - Blocks cloud provider metadata endpoints (`169.254.169.254`, `169.254.0.0/16`, `metadata.google.internal`, `instance-data`).
+  - Blocks restricted IPv6 addresses (loopback `[::1]`, link-local `fe80::/10`, unique-local `fc00::/7`).
+  - Blocks IPv4-mapped IPv6 evasion attempts (`::ffff:127.0.0.1`, `::ffff:169.254.169.254`).
+  - Integrated into initial requests and redirect hops (`Client.send()`), raising `SSRFSecurityError`.
+  - Comprehensive unit test suite in `tests/unit/ssrf_test.nox`.
+- **Streaming Response Reader (`stream.nox`)**:
+  - `StreamResponse` model supporting incremental consumption of HTTP payloads.
+  - `read_chunk(chunk_size)` and `read_chunk_bytes(chunk_size) -> Buffer` for partial reads.
+  - `iter_bytes(chunk_size) -> list[Buffer]` for block-by-block processing.
+  - `iter_lines() -> list[str]` with CRLF newline splitting.
+  - Added `Client.stream()` and top-level `nova.stream()`.
+  - Unit tests in `tests/unit/stream_test.nox` and live stream integration test against `httpbin.org/stream/5` in `tests/integration/stream_integration_test.nox`.
+- **Async Concurrency Integration**:
+  - Verified non-blocking concurrent request execution using Nox's native fiber scheduler (`spawn` and `Task[T]`).
+  - Added `tests/integration/async_concurrency_test.nox`.
+- **Compiler Limitations & Insights Documented**:
+  - Documented `spawn` class method limitation and cross-module import symbol behavior in `NOX_LIMITATIONS.md`.
+  - Documented `HEAD` keep-alive socket hang root cause.
+- **Test Suite Expansion**:
+  - 22 tests passing (`22 passed, 0 failed (22 total)` in `noxc test`).
+
 ## [0.3.0] - 2026-10-29
 
 ### Added — Phase 3 Transport Expansion

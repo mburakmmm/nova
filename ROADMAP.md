@@ -12,8 +12,8 @@
 | **Phase 1** | Nova MVP (GET/POST, JSON, Headers, URL, Errors) | ✅ **COMPLETED** | v0.1.0 | 6 unit/integration tests |
 | **Phase 2** | Client Ergonomics (Auth, CookieJar, Retry, Forms) | ✅ **COMPLETED** | v0.1.0 | 5 unit tests |
 | **Phase 3** | Transport Expansion (Methods, Timeout, Binary, Multipart, Redirects) | ✅ **COMPLETED** | v0.3.0 | 18 unit/integration tests |
-| **Phase 4** | Advanced Features (Streaming, Async, Pooling, Proxy) | ⏳ **PLANNED** | v0.4.0+ | Planned |
-| **Phase 5** | Stable 1.0 Release (API Freeze, Security Audit, SemVer) | ⏳ **PENDING** | v1.0.0 | Full Matrix |
+| **Phase 4** | Advanced Features (Streaming, SSRF Shield, Async Concurrency) | ✅ **COMPLETED** | v0.4.0 | 22 unit/integration tests |
+| **Phase 5** | Stable 1.0 Release (API Freeze, Security Audit, SemVer) | ⏳ **NEXT** | v1.0.0 | Full Matrix |
 
 ---
 
@@ -93,13 +93,27 @@
 
 ---
 
-### ⏳ Phase 4 — Advanced Features (PLANNED)
-- [ ] **4.1. Binary Body Support**: Byte-oriented response handling (`buffer.nox` / raw bytes) beyond NUL-terminated strings.
-- [ ] **4.2. Streaming Download & Upload**: Chunked streaming for large files without whole-payload memory buffering.
-- [ ] **4.3. Connection Pooling**: TCP/TLS connection reuse across multiple client requests.
-- [ ] **4.4. Async Client**: Cooperative fiber async transport (`async def get()` / `await client.get()`).
-- [ ] **4.5. HTTP / SOCKS Proxy**: Proxy forwarding with secure proxy authentication.
-- [ ] **4.6. SSRF Protection Shield**: Configurable private IP blocklist (RFC 1918, loopback, link-local).
+### ✅ Phase 4 — Advanced Features & Security Shield (COMPLETED — v0.4.0)
+- [x] **4.1. SSRF Protection Shield (`ssrf.nox`)**:
+  - `SSRFPolicy` defense-in-depth shield with configurable private IP, loopback, link-local, and cloud metadata blocking.
+  - Blocks RFC 1918 private IPv4 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`, `0.0.0.0/8`), cloud metadata (`169.254.169.254`, `169.254.0.0/16`).
+  - Blocks IPv6 loopback (`::1`), link-local (`fe80::/10`), unique-local (`fc00::/7`), and IPv4-mapped IPv6 evasion (`::ffff:127.0.0.1`, `::ffff:169.254.169.254`).
+  - Enforced on initial requests and redirect destinations in `Client.send()`.
+  - Comprehensive unit test suite in `tests/unit/ssrf_test.nox`.
+- [x] **4.2. Streaming Response Reader (`stream.nox`)**:
+  - `StreamResponse` model with incremental consumption APIs: `read_chunk(chunk_size)`, `read_chunk_bytes(chunk_size) -> Buffer`, `iter_bytes(chunk_size)`, `iter_lines()`, `read_all()`.
+  - `Client.stream()` and top-level `nova.stream()`.
+  - Unit tests in `tests/unit/stream_test.nox` and live integration test against `httpbin.org/stream/5` in `tests/integration/stream_integration_test.nox`.
+- [x] **4.3. Async Concurrency with Nox Fibers**:
+  - Verified concurrent non-blocking HTTP requests across fiber task pool via `spawn` and `Task[T]`.
+  - Added live concurrent integration test in `tests/integration/async_concurrency_test.nox`.
+  - Documented compiler limitations regarding `spawn` method calls and cross-module import symbol behavior in `NOX_LIMITATIONS.md`.
+- [x] **4.4. Binary Body & Buffer Preservation**:
+  - Embedded NUL byte and binary data handling via `Response.bytes() -> Buffer`.
+  - Unit test in `tests/unit/binary_response_test.nox`.
+- [x] **4.5. Upstream Transport Matrix & Limitation Tracking**:
+  - Documented HEAD request keep-alive socket hang in `NOX_LIMITATIONS.md`.
+  - Documented missing runtime persistent connection pooling and proxy dialer in `docs/transport-capabilities.md`.
 
 ---
 
