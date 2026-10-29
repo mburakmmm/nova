@@ -8,6 +8,8 @@ import url
 from url import sanitize_url
 import nox.json
 from nox.json import JsonValue, JsonError
+import nox.bytes
+from nox.buffer import Buffer
 
 class Response:
     status_code: int
@@ -64,3 +66,6 @@ class Response:
 
     def text(self: Response) -> str:
         return self.body
+
+    def bytes(self: Response) -> Buffer:
+        return nox.bytes.from_str(self.body)

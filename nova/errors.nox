@@ -1,2 +1,2 @@
 import errors
-from errors import NovaError, TransportError, ConnectionError, HttpStatusError, InvalidUrlError, InvalidHeaderError, DecodeError, EncodeError, RetryExhaustedError, UnsupportedFeatureError
+from errors import NovaError, TransportError, ConnectionError, TimeoutError, HttpStatusError, InvalidUrlError, InvalidHeaderError, DecodeError, EncodeError, RetryExhaustedError, UnsupportedFeatureError

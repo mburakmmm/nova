@@ -1,0 +1,29 @@
+# tests/unit/binary_response_test.nox — Test binary body preservation and Response.bytes() Buffer access.
+
+import nox.test
+import response
+from response import Response
+import headers
+from headers import Headers
+import nox.buffer
+from nox.buffer import Buffer
+
+h: Headers = Headers()
+h.set("Content-Type", "application/octet-stream")
+
+# Response with embedded NUL and arbitrary byte values
+raw_binary_body: str = "binary\x00data\x01\x7f"
+resp: Response = Response(200, raw_binary_body, h, "https://api.example.com/binary", "GET", 15)
+
+# Verify Response text contains string
+nox.test.assert_eq_int(len(resp.text()), 13, "string length matches")
+
+# Access as Buffer via Response.bytes()
+buf: Buffer = resp.bytes()
+nox.test.assert_eq_int(buf.len(), 13, "buffer length is 13")
+nox.test.assert_eq_int(int(buf.get(0)), 98, "first byte 'b' is 98")
+nox.test.assert_eq_int(int(buf.get(6)), 0, "embedded NUL byte is 0")
+nox.test.assert_eq_int(int(buf.get(11)), 1, "byte 1 is 1")
+nox.test.assert_eq_int(int(buf.get(12)), 127, "DEL byte is 127")
+
+print("binary_response_test passed")

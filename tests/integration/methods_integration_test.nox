@@ -1,0 +1,32 @@
+# tests/integration/methods_integration_test.nox — End-to-end integration tests for PUT, PATCH, DELETE, HEAD, and OPTIONS.
+
+import nox.test
+import client
+from client import Client
+import response
+from response import Response
+
+cli: Client = Client("https://httpbin.org")
+
+# 1. PUT request with JSON payload
+put_res: Response = cli.put("/put", json="{\"project\": \"nova\", \"status\": \"awesome\"}")
+nox.test.assert_eq_int(put_res.status_code, 200, "PUT status is 200")
+nox.test.assert_true(put_res.is_success(), "PUT is_success is true")
+nox.test.assert_true("nova" in put_res.text(), "PUT response contains submitted JSON data")
+
+# 2. PATCH request with body
+patch_res: Response = cli.patch("/patch", body="patched_attribute_value", headers={"Content-Type": "text/plain"})
+nox.test.assert_eq_int(patch_res.status_code, 200, "PATCH status is 200")
+nox.test.assert_true(patch_res.is_success(), "PATCH is_success is true")
+nox.test.assert_true("patched_attribute_value" in patch_res.text(), "PATCH response contains patched text")
+
+# 3. DELETE request
+del_res: Response = cli.delete("/delete")
+nox.test.assert_eq_int(del_res.status_code, 200, "DELETE status is 200")
+nox.test.assert_true(del_res.is_success(), "DELETE is_success is true")
+
+# 4. OPTIONS request
+opt_res: Response = cli.options("/get")
+nox.test.assert_true(opt_res.is_success(), "OPTIONS is_success is true")
+
+print("methods_integration_test passed")

@@ -12,6 +12,9 @@ class TransportError(NovaError):
 class ConnectionError(TransportError):
     pass
 
+class TimeoutError(TransportError):
+    pass
+
 class HttpStatusError(NovaError):
     status_code: int
     url: str

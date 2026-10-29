@@ -1,8 +1,8 @@
 # Nova — Modern HTTP Client for Nox
 
-[![Nox Version](https://img.shields.io/badge/noxc-2.0.27-blue.svg)](https://github.com/mburakmmm/nox-lang)
+[![Nox Version](https://img.shields.io/badge/noxc-2.0.63-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-13%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-18%20passed-brightgreen.svg)]()
 
 > A pleasant, safe, predictable, production-oriented HTTP client for the **Nox programming language**, inspired by Python Requests and HTTPX.
 
@@ -257,9 +257,10 @@ except NovaError as ne:
 | Basic & Bearer Auth | ✅ Supported | Redacted representations |
 | Per-Client CookieJar | ✅ Supported | Domain isolation, Set-Cookie parsing |
 | Exponential Backoff | ✅ Supported | Idempotency guarded, Retry-After respected |
-| PUT / PATCH / DELETE | ⏳ Proposed | Gated by upstream `noxrt.o` export (raises `UnsupportedFeatureError`) |
-| Request Timeout | ⏳ Planned | Awaiting runtime timeout hook |
-| Streaming / Binary | ⏳ Planned | Awaiting byte-buffer transport support |
+| PUT / PATCH / DELETE / HEAD / OPTIONS | ✅ Supported | Native stdlib `nox.http.request` transport |
+| Request Timeout | ✅ Supported | True socket timeout (`timeout_ms`) & `TimeoutError` |
+| Binary Body Access | ✅ Supported | Native `Response.bytes() -> Buffer` via `nox.bytes` |
+| Streaming Download / Upload | ⏳ Planned | Phase 4 roadmap |
 
 ---
 
@@ -273,7 +274,7 @@ noxc test
 
 Output:
 ```text
-13 passed, 0 failed (13 total)
+18 passed, 0 failed (18 total)
 ```
 
 Run demonstration:

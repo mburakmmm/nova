@@ -1,7 +1,7 @@
 # nova.nox — Top-level facade for the Nova HTTP client library.
 
 import errors
-from errors import NovaError, TransportError, ConnectionError, HttpStatusError, InvalidUrlError, InvalidHeaderError, DecodeError, EncodeError, RetryExhaustedError, UnsupportedFeatureError
+from errors import NovaError, TransportError, ConnectionError, TimeoutError, HttpStatusError, InvalidUrlError, InvalidHeaderError, DecodeError, EncodeError, RetryExhaustedError, UnsupportedFeatureError
 import headers
 from headers import Headers, headers_from_dict
 import url
@@ -23,73 +23,113 @@ from multipart import MultipartEncoder, MultipartFile, file_from_path
 import client
 from client import Client
 
+def request(
+    method: str,
+    url_target: str,
+    body: str = "",
+    json: str = "",
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
+) -> Response:
+    c: Client = Client()
+    return c.request(method, url_target, body, json, params, headers_dict, timeout_ms)
+
 def get(
     url_target: str,
     params: dict[str, str] | None = None,
-    headers_dict: dict[str, str] | None = None
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
 ) -> Response:
     c: Client = Client()
-    return c.get(url_target, params, headers_dict)
+    return c.get(url_target, params, headers_dict, timeout_ms)
 
 def post(
     url_target: str,
     body: str = "",
     json: str = "",
     params: dict[str, str] | None = None,
-    headers_dict: dict[str, str] | None = None
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
 ) -> Response:
     c: Client = Client()
-    return c.post(url_target, body, json, params, headers_dict)
+    return c.post(url_target, body, json, params, headers_dict, timeout_ms)
 
 def post_json(
     url_target: str,
     json_str: str,
     params: dict[str, str] | None = None,
-    headers_dict: dict[str, str] | None = None
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
 ) -> Response:
     c: Client = Client()
-    return c.post_json(url_target, json_str, params, headers_dict)
+    return c.post_json(url_target, json_str, params, headers_dict, timeout_ms)
 
 def post_form(
     url_target: str,
     data: dict[str, str],
     params: dict[str, str] | None = None,
-    headers_dict: dict[str, str] | None = None
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
 ) -> Response:
     c: Client = Client()
-    return c.post_form(url_target, data, params, headers_dict)
+    return c.post_form(url_target, data, params, headers_dict, timeout_ms)
 
 def post_multipart(
     url_target: str,
     encoder: MultipartEncoder,
     params: dict[str, str] | None = None,
-    headers_dict: dict[str, str] | None = None
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
 ) -> Response:
     c: Client = Client()
-    return c.post_multipart(url_target, encoder, params, headers_dict)
+    return c.post_multipart(url_target, encoder, params, headers_dict, timeout_ms)
 
 def put(
     url_target: str,
     body: str = "",
+    json: str = "",
     params: dict[str, str] | None = None,
-    headers_dict: dict[str, str] | None = None
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
 ) -> Response:
     c: Client = Client()
-    return c.put(url_target, body, params, headers_dict)
+    return c.put(url_target, body, json, params, headers_dict, timeout_ms)
 
 def patch(
     url_target: str,
     body: str = "",
+    json: str = "",
     params: dict[str, str] | None = None,
-    headers_dict: dict[str, str] | None = None
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
 ) -> Response:
     c: Client = Client()
-    return c.patch(url_target, body, params, headers_dict)
+    return c.patch(url_target, body, json, params, headers_dict, timeout_ms)
 
 def delete(
     url_target: str,
     params: dict[str, str] | None = None,
-    headers_dict: dict[str, str] | None = None
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
 ) -> Response:
     c: Client = Client()
-    return c.delete(url_target, params, headers_dict)
+    return c.delete(url_target, params, headers_dict, timeout_ms)
+
+def head(
+    url_target: str,
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
+) -> Response:
+    c: Client = Client()
+    return c.head(url_target, params, headers_dict, timeout_ms)
+
+def options(
+    url_target: str,
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
+) -> Response:
+    c: Client = Client()
+    return c.options(url_target, params, headers_dict, timeout_ms)

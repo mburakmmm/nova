@@ -56,17 +56,19 @@ class Client:
     retry_policy: RetryPolicy | None
     raise_on_status: bool
     max_redirects: int
+    timeout_ms: int
     transport: TransportAdapter
 
     def __init__(
         self: Client,
         base_url: str = "",
         raise_for_status: bool = False,
-        max_redirects: int = 5
+        max_redirects: int = 5,
+        timeout_ms: int = 0
     ) -> None:
         self.base_url = base_url
         self.default_headers = Headers()
-        self.default_headers.set("User-Agent", "Nova/0.1.0")
+        self.default_headers.set("User-Agent", "Nova/0.3.0")
         self.default_headers.set("Accept", "*/*")
         self.basic_auth = None
         self.bearer_auth = None
@@ -74,7 +76,12 @@ class Client:
         self.retry_policy = None
         self.raise_on_status = raise_for_status
         self.max_redirects = max_redirects
+        self.timeout_ms = timeout_ms
         self.transport = TransportAdapter()
+
+    def set_timeout(self: Client, timeout_ms: int) -> Client:
+        self.timeout_ms = timeout_ms
+        return self
 
     def set_max_redirects(self: Client, n: int) -> Client:
         self.max_redirects = n
@@ -204,7 +211,8 @@ class Client:
         body: str = "",
         json: str = "",
         params: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
     ) -> Response:
         full_url: str = resolve_url(self.base_url, url_or_path, params)
 
@@ -234,16 +242,21 @@ class Client:
             if not req_headers.has("Content-Type"):
                 req_headers.set("Content-Type", "application/json")
 
-        req: Request = Request(method, full_url, req_headers, payload)
+        eff_timeout: int = self.timeout_ms
+        if timeout_ms >= 0:
+            eff_timeout = timeout_ms
+
+        req: Request = Request(method, full_url, req_headers, payload, eff_timeout)
         return self.send(req)
 
     def get(
         self: Client,
         url: str,
         params: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
     ) -> Response:
-        return self.request("GET", url, "", "", params, headers)
+        return self.request("GET", url, "", "", params, headers, timeout_ms)
 
     def post(
         self: Client,
@@ -251,69 +264,96 @@ class Client:
         body: str = "",
         json: str = "",
         params: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
     ) -> Response:
-        return self.request("POST", url, body, json, params, headers)
+        return self.request("POST", url, body, json, params, headers, timeout_ms)
 
     def post_json(
         self: Client,
         url: str,
         json_str: str,
         params: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
     ) -> Response:
-        return self.request("POST", url, "", json_str, params, headers)
+        return self.request("POST", url, "", json_str, params, headers, timeout_ms)
 
     def post_form(
         self: Client,
         url: str,
         data: dict[str, str],
         params: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
     ) -> Response:
         encoded_form: str = nox.url.query_encode(data)
         form_headers: dict[str, str] = {"Content-Type": "application/x-www-form-urlencoded"}
         if headers is not None:
             for k in headers:
                 form_headers[k] = headers[k]
-        return self.request("POST", url, encoded_form, "", params, form_headers)
+        return self.request("POST", url, encoded_form, "", params, form_headers, timeout_ms)
 
     def post_multipart(
         self: Client,
         url: str,
         encoder: MultipartEncoder,
         params: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
     ) -> Response:
         body: str = encoder.build()
         mp_headers: dict[str, str] = {"Content-Type": encoder.content_type()}
         if headers is not None:
             for k in headers:
                 mp_headers[k] = headers[k]
-        return self.request("POST", url, body, "", params, mp_headers)
+        return self.request("POST", url, body, "", params, mp_headers, timeout_ms)
 
     def put(
         self: Client,
         url: str,
         body: str = "",
+        json: str = "",
         params: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
     ) -> Response:
-        return self.request("PUT", url, body, "", params, headers)
+        return self.request("PUT", url, body, json, params, headers, timeout_ms)
 
     def patch(
         self: Client,
         url: str,
         body: str = "",
+        json: str = "",
         params: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
     ) -> Response:
-        return self.request("PATCH", url, body, "", params, headers)
+        return self.request("PATCH", url, body, json, params, headers, timeout_ms)
 
     def delete(
         self: Client,
         url: str,
         params: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
     ) -> Response:
-        return self.request("DELETE", url, "", "", params, headers)
+        return self.request("DELETE", url, "", "", params, headers, timeout_ms)
+
+    def head(
+        self: Client,
+        url: str,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
+    ) -> Response:
+        return self.request("HEAD", url, "", "", params, headers, timeout_ms)
+
+    def options(
+        self: Client,
+        url: str,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
+    ) -> Response:
+        return self.request("OPTIONS", url, "", "", params, headers, timeout_ms)

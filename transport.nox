@@ -1,7 +1,7 @@
 # transport.nox — Transport adapter wrapping nox.http stdlib interface.
 
 import nox.http
-from nox.http import HttpResponse, HttpError
+from nox.http import HttpResponse, HttpError, HttpTimeoutError
 import nox.time
 import request
 from request import Request
@@ -10,7 +10,7 @@ from response import Response
 import headers
 from headers import Headers, headers_from_dict
 import errors
-from errors import TransportError, UnsupportedFeatureError
+from errors import TransportError, TimeoutError, UnsupportedFeatureError
 import url
 from url import sanitize_url
 
@@ -23,30 +23,16 @@ class TransportAdapter:
         target_url: str = req.url
         raw_headers: dict[str, str] = req.headers.to_dict()
 
-        if method == "GET":
+        if method == "GET" or method == "POST" or method == "PUT" or method == "PATCH" or method == "DELETE" or method == "HEAD" or method == "OPTIONS":
             start_ms: int = nox.time.now_ms()
             try:
-                res: HttpResponse = nox.http.get(target_url, raw_headers)
+                res: HttpResponse = nox.http.request(method, target_url, req.body, raw_headers, req.timeout_ms)
                 elapsed: int = nox.time.now_ms() - start_ms
                 resp_headers: Headers = headers_from_dict(res.headers)
-                return Response(res.status, res.body, resp_headers, target_url, "GET", elapsed)
+                return Response(res.status, res.body, resp_headers, target_url, method, elapsed)
+            except HttpTimeoutError as te:
+                raise TimeoutError("Request timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te))
             except HttpError as e:
-                raise TransportError("GET request failed for " + sanitize_url(target_url) + ": " + str(e))
-
-        if method == "POST":
-            start_ms: int = nox.time.now_ms()
-            try:
-                res: HttpResponse = nox.http.post(target_url, req.body, raw_headers)
-                elapsed: int = nox.time.now_ms() - start_ms
-                resp_headers: Headers = headers_from_dict(res.headers)
-                return Response(res.status, res.body, resp_headers, target_url, "POST", elapsed)
-            except HttpError as e:
-                raise TransportError("POST request failed for " + sanitize_url(target_url) + ": " + str(e))
-
-        if method == "PUT" or method == "PATCH" or method == "DELETE" or method == "HEAD" or method == "OPTIONS":
-            raise UnsupportedFeatureError(
-                method,
-                "HTTP method '" + method + "' is not supported by the underlying Nox runtime transport. See docs/transport-capabilities.md."
-            )
+                raise TransportError(method + " request failed for " + sanitize_url(target_url) + ": " + str(e))
 
         raise UnsupportedFeatureError(method, "Unrecognized HTTP method: " + method)

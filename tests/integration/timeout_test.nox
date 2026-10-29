@@ -1,0 +1,32 @@
+# tests/integration/timeout_test.nox — Test real request timeout with HttpTimeoutError mapping to TimeoutError.
+
+import nox.test
+import client
+from client import Client
+import response
+from response import Response
+import errors
+from errors import TimeoutError, TransportError
+
+cli: Client = Client("https://httpbin.org")
+
+# Request to /delay/5 with timeout_ms=1000 should time out and raise TimeoutError
+timed_out: bool = False
+try:
+    cli.get("/delay/5", timeout_ms=1000)
+except TimeoutError as te:
+    timed_out = True
+    nox.test.assert_true("1000" in te.message, "timeout duration mentioned in error message")
+
+nox.test.assert_true(timed_out, "live request times out and raises TimeoutError")
+
+# Verify TimeoutError is a subclass of TransportError (AGENTS.md §9)
+te_subclass_handled: bool = False
+try:
+    cli.get("/delay/5", timeout_ms=1000)
+except TransportError as tr_err:
+    te_subclass_handled = True
+
+nox.test.assert_true(te_subclass_handled, "TimeoutError caught as TransportError subclass")
+
+print("timeout_test passed")

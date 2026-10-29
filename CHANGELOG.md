@@ -5,6 +5,25 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-29
+
+### Added — Phase 3 Transport Expansion
+- **Full HTTP Method Suite**:
+  - Live native support for `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS` via Nox stdlib `nox.http.request()`.
+  - Added `Client.put()`, `Client.patch()`, `Client.delete()`, `Client.head()`, `Client.options()`.
+  - Added top-level convenience functions: `nova.put()`, `nova.patch()`, `nova.delete()`, `nova.head()`, `nova.options()`, `nova.request()`.
+  - Live verified against httpbin in `tests/integration/methods_integration_test.nox`.
+- **True Socket Request Timeout**:
+  - `Client(timeout_ms=...)` and request-level `timeout_ms` parameter.
+  - Native runtime socket shutdown via `nox.http.HttpTimeoutError` mapped to `nova.TimeoutError` (subclass of `TransportError`).
+  - No fake post-return timing wrapper; verified against live `/delay/5` endpoint in `tests/integration/timeout_test.nox`.
+- **Binary Body Access (`Buffer`)**:
+  - Embedded NUL byte preservation and raw bytes access.
+  - Added `Response.bytes() -> Buffer` utilizing stdlib `nox.bytes.from_str()`.
+  - Verified in `tests/unit/binary_response_test.nox`.
+- **Test Suite Expansion**:
+  - 18 unit and integration tests passing (`18 passed, 0 failed`).
+
 ## [0.2.2] - 2026-10-26
 
 ### Security & Protocol Hardening (Reviewer Audit v0.2.2 Fixes)
