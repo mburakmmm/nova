@@ -1,0 +1,38 @@
+name: Nova CI
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test Suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout Nova
+        uses: actions/checkout@v4
+
+      - name: Install Nox
+        run: |
+          curl -fsSL https://noxlang.com/install.sh | bash
+          echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
+
+      - name: Verify Nox Toolchain
+        run: |
+          noxc version
+
+      - name: Run Nova Test Suite
+        run: |
+          noxc test
+
+      - name: Run Microbenchmarks
+        run: |
+          noxc run benchmarks/bench_nova.nox
