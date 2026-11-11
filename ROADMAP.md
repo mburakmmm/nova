@@ -153,7 +153,7 @@ Source: external audit of v0.5.0 (score 8.3/10). Order = priority.
 - [x] **6.11 (P2) Retry overflow guard** (early cap of exponent).
 - [x] **6.12 (P2) Transport dependency injection**: `Client.set_transport(...)`, mock transport for tests.
 - [x] **6.13 (P2) Connection pool scope documentation** (global vs per-Client) + API honesty.
-- [ ] **6.14 GitHub Release** for v0.6.0, CI green, docs/CHANGELOG/README updated.
+- [x] **6.14 GitHub Release**: Released v0.6.0 on GitHub, published to central index, CI 100% green on both macOS and Linux.
 
 ---
 
