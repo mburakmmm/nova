@@ -14,7 +14,8 @@
 | **Phase 3** | Transport Expansion (Methods, Timeout, Binary, Multipart, Redirects) | ✅ **COMPLETED** | v0.3.0 | 18 unit/integration tests |
 | **Phase 4** | Advanced Features (Streaming, SSRF Shield, Async Concurrency) | ✅ **COMPLETED** | v0.4.0 | 22 unit/integration tests |
 | **Phase 5** | Native Streaming, Pooling & File Transfer | ✅ **COMPLETED** | v0.5.0 | 24 unit/integration tests |
-| **Phase 6** | Stable 1.0 Release (API Freeze, Security Audit, SemVer) | ⏳ **NEXT** | v1.0.0 | Full Matrix |
+| **Phase 6** | Security & Standards Hardening (GPT audit of v0.5.0) | ✅ **COMPLETED** | v0.6.0 | 34 unit/integration tests |
+| **Phase 7** | Stable 1.0 Release (API Freeze, Security Audit, SemVer) | ⏳ **NEXT** | v1.0.0 | Full Matrix |
 
 ---
 
@@ -42,7 +43,7 @@
 ---
 
 ### ✅ Phase 2 — Client Ergonomics (COMPLETED)
-- [x] **2.1. Client Session (`client.nox`)**: `Client(base_url, raise_for_status)` with default headers (`User-Agent: Nova/0.5.0`, `Accept: */*`).
+- [x] **2.1. Client Session (`client.nox`)**: `Client(base_url, raise_for_status)` with default headers (`User-Agent: Nova/0.6.0`, `Accept: */*`).
 - [x] **2.2. Zero Mutable Global State**: Full instance isolation between `Client` objects.
 - [x] **2.3. Authentication Helpers (`auth.nox`)**:
   - `BasicAuth`: Base64 UTF-8 encoding, credential redaction in `redacted()`.
@@ -137,11 +138,30 @@
 
 ---
 
-### ⏳ Phase 6 — Stable 1.0 Release (NEXT)
-- [ ] **6.1. Public API Freeze**: Final SemVer compatibility guarantee and documentation review.
-- [ ] **6.2. Microbenchmarks Update**: Benchmark connection reuse speedups with persistent pool vs unpooled requests.
-- [ ] **6.3. Security Checklist Sign-off**: Complete verification of the AGENTS.md security checklist.
-- [ ] **6.4. Official 1.0 Release**: Tag `v1.0.0` and update `nox.json` / central index.
+### ✅ Phase 6 — Security & Standards Hardening (COMPLETED — v0.6.0)
+Source: external audit of v0.5.0 (score 8.3/10). Order = priority.
+- [x] **6.1 (P0) CI fix**: `tests/fixtures/` missing in git → `FsError` on Linux. Fixed: `tests/fixtures/.gitkeep` committed (root cause of the Linux failure).
+- [x] **6.2 (P0) SSRF DNS-resolution check**: validate resolved IP before connect. Done: `HostResolver` + `set_resolver()` (all IPs validated, fail-closed) + `strict_hostnames`. Runtime IP pinning is Nox limitation §14.
+- [x] **6.3 (P1) Redirect Cookie leak**: always delete `Cookie` on cross-origin redirect, re-apply from jar only.
+- [x] **6.4 (P1) Real IPv4/IPv6 parser** in `ssrf.nox` (hex/octal/decimal IPv4, compressed IPv6, mapped/NAT64/6to4, unspecified).
+- [x] **6.5 (P1) Public Suffix handling** in CookieJar (embedded curated PSL subset + `add_public_suffix`).
+- [x] **6.6 (P1) Cookie expiry**: `Expires` / `Max-Age`, deletion.
+- [x] **6.7 (P1) Multiple Set-Cookie**: verify Headers/transport; `\n`-joined multi-value support in Nova; runtime keeps only the last value (Nox limitation §16).
+- [x] **6.8 (P1) Lazy streaming**: `for_each_line(callback)`, `for_each_chunk(callback)`; document `iter_lines`/`iter_bytes` buffering honestly.
+- [x] **6.9 (P2) Retry jitter** (deterministic injectable source).
+- [x] **6.10 (P2) Retry-After HTTP-date** parsing.
+- [x] **6.11 (P2) Retry overflow guard** (early cap of exponent).
+- [x] **6.12 (P2) Transport dependency injection**: `Client.set_transport(...)`, mock transport for tests.
+- [x] **6.13 (P2) Connection pool scope documentation** (global vs per-Client) + API honesty.
+- [ ] **6.14 GitHub Release** for v0.6.0, CI green, docs/CHANGELOG/README updated.
+
+---
+
+### ⏳ Phase 7 — Stable 1.0 Release (NEXT)
+- [ ] **7.1. Public API Freeze**
+- [ ] **7.2. Pool benchmark**
+- [ ] **7.3. Security checklist sign-off**
+- [ ] **7.4. Tag v1.0.0**
 
 ---
 

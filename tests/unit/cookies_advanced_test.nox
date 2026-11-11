@@ -1,0 +1,101 @@
+# tests/unit/cookies_advanced_test.nox — Public suffix, expiry, multiple Set-Cookie, default-path.
+
+import nox.test
+import nox.strings
+import cookies
+from cookies import CookieJar
+import headers
+from headers import Headers
+
+def jar_at(now_s: int) -> CookieJar:
+    j: CookieJar = CookieJar()
+    j.now_override_s = now_s
+    return j
+
+def resp(v: str) -> Headers:
+    h: Headers = Headers()
+    h.set_multi("Set-Cookie", nox.strings.split(v, "\n"))
+    return h
+
+# --- Public Suffix ---
+j1: CookieJar = jar_at(1000)
+j1.extract_from_response("https://foo.co.uk/", resp("a=1; Domain=co.uk"))
+nox.test.assert_eq_int(j1.len(), 0, "Domain=co.uk rejected (multi-label public suffix)")
+j1.extract_from_response("https://foo.github.io/", resp("a=1; Domain=github.io"))
+nox.test.assert_eq_int(j1.len(), 0, "Domain=github.io rejected (private suffix)")
+j1.extract_from_response("https://a.example.co.uk/", resp("a=1; Domain=example.co.uk"))
+nox.test.assert_eq_int(j1.len(), 1, "registrable domain under co.uk accepted")
+# Host exactly a public suffix degrades to host-only
+j1b: CookieJar = jar_at(1000)
+j1b.extract_from_response("https://github.io/", resp("h=1; Domain=github.io"))
+nox.test.assert_eq_int(j1b.len(), 1, "exact-host public suffix stored")
+nox.test.assert_eq_str(j1b.to_cookie_header("https://github.io/"), "h=1", "sent to exact host")
+nox.test.assert_eq_str(j1b.to_cookie_header("https://evil.github.io/"), "", "NOT sent to sibling subdomain (host-only)")
+# user-extended suffix
+j1c: CookieJar = jar_at(1000)
+j1c.add_public_suffix("corp.internal")
+j1c.extract_from_response("https://x.corp.internal/", resp("a=1; Domain=corp.internal"))
+nox.test.assert_eq_int(j1c.len(), 0, "custom public suffix rejected")
+
+# --- Max-Age ---
+j2: CookieJar = jar_at(1000)
+j2.extract_from_response("https://example.com/", resp("m=1; Max-Age=60"))
+nox.test.assert_eq_str(j2.to_cookie_header("https://example.com/"), "m=1", "fresh cookie sent")
+j2.now_override_s = 1059
+nox.test.assert_eq_str(j2.to_cookie_header("https://example.com/"), "m=1", "still valid before expiry")
+j2.now_override_s = 1060
+nox.test.assert_eq_str(j2.to_cookie_header("https://example.com/"), "", "expired cookie not sent")
+nox.test.assert_eq_int(j2.purge_expired(), 1, "purge removes expired")
+nox.test.assert_eq_int(j2.len(), 0, "jar empty after purge")
+
+# Max-Age=0 / negative deletes existing
+j3: CookieJar = jar_at(1000)
+j3.extract_from_response("https://example.com/", resp("d=1"))
+nox.test.assert_eq_int(j3.len(), 1, "session cookie stored")
+j3.extract_from_response("https://example.com/", resp("d=; Max-Age=0"))
+nox.test.assert_eq_int(j3.len(), 0, "Max-Age=0 deletes cookie")
+j3.extract_from_response("https://example.com/", resp("e=1"))
+j3.extract_from_response("https://example.com/", resp("e=; Max-Age=-5"))
+nox.test.assert_eq_int(j3.len(), 0, "negative Max-Age deletes cookie")
+
+# --- Expires ---
+j4: CookieJar = jar_at(784111000)
+j4.extract_from_response("https://example.com/", resp("x=1; Expires=Sun, 06 Nov 1994 08:49:37 GMT"))
+nox.test.assert_eq_str(j4.to_cookie_header("https://example.com/"), "x=1", "Expires in future honoured")
+j4.now_override_s = 784111777
+nox.test.assert_eq_str(j4.to_cookie_header("https://example.com/"), "", "Expires reached -> not sent")
+j4b: CookieJar = jar_at(2000000000)
+j4b.extract_from_response("https://example.com/", resp("y=1; Expires=Sun, 06 Nov 1994 08:49:37 GMT"))
+nox.test.assert_eq_int(j4b.len(), 0, "already-expired Expires never stored")
+
+# Max-Age wins over Expires
+j5: CookieJar = jar_at(1000)
+j5.extract_from_response("https://example.com/", resp("p=1; Expires=Sun, 06 Nov 1994 08:49:37 GMT; Max-Age=100"))
+nox.test.assert_eq_str(j5.to_cookie_header("https://example.com/"), "p=1", "Max-Age takes precedence over Expires")
+
+# --- Multiple Set-Cookie (newline-joined by the Nox runtime convention) ---
+j6: CookieJar = jar_at(1000)
+j6.extract_from_response("https://example.com/", resp("a=1; Path=/\nb=2; Path=/; Secure\nc=3; Path=/"))
+nox.test.assert_eq_int(j6.len(), 3, "all three Set-Cookie values stored")
+nox.test.assert_eq_str(j6.to_cookie_header("https://example.com/"), "a=1; b=2; c=3", "multi cookies sent together")
+nox.test.assert_eq_str(j6.to_cookie_header("http://example.com/"), "a=1; c=3", "Secure one withheld over http")
+
+# One bad cookie in a batch must not poison the others
+j7: CookieJar = jar_at(1000)
+j7.extract_from_response("https://example.com/", resp("ok=1\nevil=1; Domain=other.net\nok2=2"))
+nox.test.assert_eq_int(j7.len(), 2, "rejected cookie skipped, others kept")
+
+# --- default-path (RFC 6265 §5.1.4) ---
+j8: CookieJar = jar_at(1000)
+j8.extract_from_response("https://example.com/app/login", resp("dp=1"))
+nox.test.assert_eq_str(j8.to_cookie_header("https://example.com/app/dashboard"), "dp=1", "default-path /app matches /app/dashboard")
+nox.test.assert_eq_str(j8.to_cookie_header("https://example.com/other"), "", "default-path /app does not match /other")
+j8.extract_from_response("https://example.com/top", resp("rp=1"))
+nox.test.assert_eq_str(j8.to_cookie_header("https://example.com/zzz"), "rp=1", "default-path / for single-segment path")
+
+# --- SameSite recorded ---
+j9: CookieJar = jar_at(1000)
+j9.extract_from_response("https://example.com/", resp("s=1; SameSite=Strict"))
+nox.test.assert_eq_str(j9.cookies[0].same_site, "strict", "SameSite parsed")
+
+print("cookies_advanced_test passed")

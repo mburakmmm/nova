@@ -8,7 +8,7 @@ from client import Client
 import response
 from response import Response
 import headers
-from headers import Headers, headers_from_dict
+from headers import Headers, headers_from_dict, response_headers_from_dict
 import url
 from url import resolve_url
 import ssrf
@@ -98,7 +98,7 @@ def upload_file(
     t0: int = nox.time.now_ms()
     raw_res: HttpResponse = nox_ul(method, full_url, source_path, h, eff_timeout)
     elapsed: int = nox.time.now_ms() - t0
-    resp_headers: Headers = headers_from_dict(raw_res.headers)
+    resp_headers: Headers = response_headers_from_dict(raw_res.headers)
 
     if jar is not None:
         jar.extract_from_response(full_url, resp_headers)

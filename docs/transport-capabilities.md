@@ -16,7 +16,7 @@ This matrix tracks HTTP capabilities supported by the underlying Nox runtime ver
 | **Binary Body (`Buffer`)** | Yes (`nox.bytes.from_str` in v2.0.31) | Yes (`Response.bytes() -> Buffer`) | `tests/unit/binary_response_test.nox` | Embedded NUL byte preservation and raw Buffer access |
 | **Streaming Response** | Yes (`nox.http.stream` in v2.0.69) | Yes (`StreamResponse` / `client.stream`) | `tests/integration/stream_integration_test.nox` | Zero-copy socket streaming, `read_chunk()`, context manager `with` |
 | **Large File Transfer** | Yes (`nox.transfer` in v2.0.69) | Yes (`nova.transfer` / `download_file`, `upload_file`) | `tests/integration/file_transfer_integration_test.nox` | Streaming file download and upload directly to/from disk |
-| **Connection Pooling** | Yes (`nox.http.client_pool` in v2.0.126) | Yes (`client.set_connection_pool`, `get_idle_connections`) | `tests/integration/pool_integration_test.nox` | Reuses open TCP/TLS connections up to max idle with idle timeout |
+| **Connection Pooling** | Yes (`nox.http.client_pool` in v2.0.126) | Yes (`client.set_connection_pool`, `get_idle_connections`) | `tests/integration/pool_integration_test.nox` | **Process-wide** pool (not per-Client); reuses open TCP/TLS connections per origin |
 | **HTTP / HTTPS Proxy** | Yes (`v2.0.129`) | Yes (Transparent upstream support) | Upstream verified | Automatically honors `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` with `CONNECT` tunnel |
 | **SSRF Protection** | No | Yes (`SSRFPolicy`) | `tests/unit/ssrf_test.nox` | Private IP blocklist, cloud metadata, IPv6 evasion, and redirect checks |
 | **Case-Insensitive Headers** | `dict[str, str]` | Yes (`Headers`) | `tests/unit/headers_test.nox` | Lookup insensitive, RFC 7230 token/CRLF validation |
@@ -27,3 +27,9 @@ This matrix tracks HTTP capabilities supported by the underlying Nox runtime ver
 | **Exponential Backoff** | No | Yes (`RetryPolicy`) | `tests/unit/retry_test.nox` | Transient status codes, POST safety guard, Retry-After cap |
 | **Multipart Form & File Upload** | No | Yes (`MultipartEncoder`, `MultipartFile`) | `tests/integration/multipart_integration_test.nox` | RFC 7578 multipart MIME streaming and file attachments |
 | **Concurrent Execution** | Fiber/Task pool (`spawn` / `Task[T]`) | Verified (Method & import spawn supported in v2.1.5) | `tests/integration/async_concurrency_test.nox` | Concurrent non-blocking requests across task pool |
+| **Transport Injection** | n/a | Yes (`Transport`, `Client.set_transport`, `MockTransport`) | `tests/unit/transport_injection_test.nox` | Network-free end-to-end tests of retry/redirect/cookie flows |
+| **DNS-aware SSRF** | No DNS API, no IP pinning | Partial (`HostResolver`, `strict_hostnames`) | `tests/unit/ssrf_advanced_test.nox` | DNS-rebinding TOCTOU remains (needs runtime connect-to-IP) |
+| **Lazy Streaming** | `HttpStream.read_chunk` | Yes (`read_line`, `for_each_line`, `for_each_chunk`) | `tests/unit/stream_lazy_test.nox` | `iter_lines`/`iter_bytes` buffer the whole body |
+| **Multiple Set-Cookie** | No (runtime keeps last value) | Ready (`\n`-joined multi-values) | `tests/unit/cookies_advanced_test.nox` | Needs runtime fix (NOX_LIMITATIONS §16) |
+| **Cookie Expiry / PSL** | n/a | Yes (`Expires`, `Max-Age`, curated PSL subset) | `tests/unit/cookies_advanced_test.nox` | PSL is a subset, not the full list |
+| **Retry jitter / HTTP-date Retry-After** | n/a | Yes | `tests/unit/retry_advanced_test.nox` | Jitter is opt-in |

@@ -12,6 +12,16 @@ import nox.bytes
 from nox.buffer import Buffer
 import nox.strings
 
+# Callback-style consumers (Nox has no lazy iterators yet, see NOX_LIMITATIONS.md §15).
+# Subclass and override; return False from on_* to stop early.
+class LineHandler:
+    def on_line(self: LineHandler, line: str) -> bool:
+        return True
+
+class ChunkHandler:
+    def on_chunk(self: ChunkHandler, chunk: str) -> bool:
+        return True
+
 class StreamResponse:
     status_code: int
     headers: Headers
@@ -21,6 +31,8 @@ class StreamResponse:
     cursor: int
     is_closed: bool
     native_stream: HttpStream | None
+    line_buf: str
+    max_line_bytes: int
 
     def __init__(
         self: StreamResponse,
@@ -39,6 +51,8 @@ class StreamResponse:
         self.cursor = 0
         self.is_closed = False
         self.native_stream = native_stream
+        self.line_buf = ""
+        self.max_line_bytes = 1048576
 
     def is_success(self: StreamResponse) -> bool:
         return self.status_code >= 200 and self.status_code <= 299
@@ -81,6 +95,56 @@ class StreamResponse:
         chunk_str: str = self.read_chunk(chunk_size)
         return nox.bytes.from_str(chunk_str)
 
+    # TRULY LAZY: returns the next line (without \n / \r\n) or None at EOF. Memory is bounded by
+    # one chunk plus the current line; a line longer than max_line_bytes raises DecodeError.
+    def read_line(self: StreamResponse) -> str | None:
+        while True:
+            nl: int = nox.strings.index_of(self.line_buf, "\n")
+            if nl >= 0:
+                line: str = self.line_buf[0:nl]
+                self.line_buf = self.line_buf[nl + 1:]
+                if len(line) > 0 and line[len(line) - 1:] == "\r":
+                    line = line[0:len(line) - 1]
+                return line
+            if len(self.line_buf) > self.max_line_bytes:
+                raise DecodeError("Line exceeds max_line_bytes (" + str(self.max_line_bytes) + ")")
+            part: str = self.read_chunk(4096)
+            if len(part) == 0:
+                if len(self.line_buf) > 0:
+                    rest: str = self.line_buf
+                    self.line_buf = ""
+                    if rest[len(rest) - 1:] == "\r":
+                        rest = rest[0:len(rest) - 1]
+                    return rest
+                return None
+            self.line_buf = self.line_buf + part
+        return None
+
+    # Lazy, bounded-memory line consumption (SSE, log streams, NDJSON, huge text bodies).
+    def for_each_line(self: StreamResponse, handler: LineHandler) -> int:
+        count: int = 0
+        while True:
+            ln: str | None = self.read_line()
+            if ln is None:
+                break
+            count = count + 1
+            if not handler.on_line(ln):
+                break
+        return count
+
+    # Lazy, bounded-memory chunk consumption.
+    def for_each_chunk(self: StreamResponse, handler: ChunkHandler, chunk_size: int = 4096) -> int:
+        total: int = 0
+        while True:
+            c: str = self.read_chunk(chunk_size)
+            if len(c) == 0:
+                break
+            total = total + len(c)
+            if not handler.on_chunk(c):
+                break
+        return total
+
+    # NOTE: buffers EVERY remaining chunk in memory. Use for_each_chunk() for large bodies.
     def iter_bytes(self: StreamResponse, chunk_size: int = 4096) -> list[Buffer]:
         chunks: list[Buffer] = []
         while True:
@@ -90,6 +154,8 @@ class StreamResponse:
             chunks.append(b)
         return chunks
 
+    # NOTE: buffers the WHOLE remaining body before splitting. Use read_line() / for_each_line()
+    # for lazy, bounded-memory consumption.
     def iter_lines(self: StreamResponse) -> list[str]:
         if self.is_closed:
             return []

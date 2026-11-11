@@ -1,0 +1,24 @@
+# psl.nox — Embedded Public Suffix subset for cookie `Domain=` validation (RFC 6265 §5.3 step 5).
+#
+# This is a CURATED SUBSET of the Mozilla Public Suffix List (ICANN + common private hosting
+# suffixes), not the full list. It rejects the overwhelmingly common supercookie vectors
+# (co.uk, com.au, github.io, ...). Applications needing full coverage can extend it at runtime
+# with `CookieJar.add_public_suffix()` or by regenerating this table from publicsuffix.org.
+# Single-label domains (com, net, ...) are always treated as public suffixes.
+
+import nox.strings
+
+_PSL_DATA: str = " co.uk org.uk me.uk ltd.uk plc.uk net.uk sch.uk ac.uk gov.uk nhs.uk police.uk com.au net.au org.au edu.au gov.au asn.au id.au co.nz net.nz org.nz govt.nz ac.nz school.nz co.jp ne.jp or.jp ac.jp go.jp ad.jp ed.jp gr.jp lg.jp co.kr or.kr ne.kr go.kr ac.kr re.kr com.cn net.cn org.cn gov.cn edu.cn ac.cn com.hk org.hk edu.hk gov.hk net.hk idv.hk com.tw org.tw edu.tw gov.tw net.tw idv.tw com.sg org.sg edu.sg gov.sg net.sg per.sg com.my org.my edu.my gov.my net.my com.ph org.ph edu.ph gov.ph net.ph co.id or.id ac.id go.id web.id my.id co.th or.th ac.th go.th in.th net.th com.vn net.vn org.vn edu.vn gov.vn co.in net.in org.in firm.in gen.in ind.in ac.in edu.in res.in gov.in com.pk net.pk org.pk edu.pk gov.pk com.bd net.bd org.bd edu.bd gov.bd com.br net.br org.br gov.br edu.br art.br blog.br eco.br eng.br com.ar net.ar org.ar gov.ar edu.ar com.mx net.mx org.mx gob.mx edu.mx com.co net.co org.co gov.co edu.co com.pe net.pe org.pe gob.pe edu.pe com.ve net.ve org.ve gob.ve com.uy net.uy org.uy gub.uy edu.uy com.ec net.ec org.ec gob.ec edu.ec com.tr net.tr org.tr gov.tr edu.tr av.tr gen.tr web.tr com.ua net.ua org.ua gov.ua edu.ua in.ua kiev.ua com.ru net.ru org.ru pp.ru msk.ru spb.ru co.za net.za org.za gov.za ac.za web.za com.ng net.ng org.ng gov.ng edu.ng co.ke or.ke ne.ke go.ke ac.ke com.eg net.eg org.eg gov.eg edu.eg com.sa net.sa org.sa gov.sa edu.sa com.ae net.ae org.ae gov.ae ac.ae co.il org.il net.il gov.il ac.il muni.il com.gr net.gr org.gr gov.gr edu.gr com.pl net.pl org.pl gov.pl edu.pl com.pt org.pt gov.pt edu.pt com.es org.es gob.es edu.es nom.es com.fr asso.fr gouv.fr nom.fr prd.fr tm.fr com.de co.at or.at ac.at gv.at co.hu org.hu info.hu priv.hu com.ro org.ro nom.ro co.ee com.ee com.cy org.cy com.mt org.mt com.lb org.lb com.jo org.jo co.ma org.ma co.tz or.tz co.ug or.ug co.zw org.zw co.zm org.zm co.mz org.mz co.bw org.bw github.io githubusercontent.com gitlab.io herokuapp.com herokussl.com appspot.com blogspot.com blogspot.co.uk blogspot.de blogspot.fr blogspot.in blogspot.jp cloudfront.net amazonaws.com elasticbeanstalk.com s3.amazonaws.com azurewebsites.net azureedge.net cloudapp.net netlify.app netlify.com vercel.app now.sh pages.dev workers.dev web.app firebaseapp.com fly.dev onrender.com railway.app glitch.me repl.co replit.dev surge.sh bitbucket.io readthedocs.io wordpress.com wixsite.com weebly.com squarespace.com myshopify.com ngrok.io ngrok-free.app trycloudflare.com duckdns.org no-ip.org dyndns.org dynu.net noip.com ddns.net hopto.org zapto.org servebeer.com myftp.org selfip.com "
+
+def is_public_suffix(domain_in: str) -> bool:
+    d: str = nox.strings.lower(domain_in)
+    while nox.strings.starts_with(d, "."):
+        d = d[1:]
+    while nox.strings.ends_with(d, "."):
+        d = d[0:len(d) - 1]
+    if len(d) == 0:
+        return True
+    if nox.strings.index_of(d, ".") < 0:
+        return True
+    key: str = " " + d + " "
+    return nox.strings.index_of(_PSL_DATA, key) >= 0

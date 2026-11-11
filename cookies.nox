@@ -5,8 +5,13 @@ from headers import Headers
 import errors
 from errors import InvalidHeaderError
 import nox.strings
+import nox.time
 import nox.url
 from nox.url import URL
+import httpdate
+from httpdate import parse_http_date
+import psl
+from psl import is_public_suffix
 
 def _validate_cookie_token(token: str) -> None:
     i: int = 0
@@ -27,6 +32,8 @@ class Cookie:
     secure: bool
     http_only: bool
     host_only: bool
+    expires: int      # Unix epoch seconds; -1 = session cookie
+    same_site: str    # "", "lax", "strict", "none"
 
     def __init__(
         self: Cookie,
@@ -36,7 +43,9 @@ class Cookie:
         path: str = "/",
         secure: bool = False,
         http_only: bool = False,
-        host_only: bool = False
+        host_only: bool = False,
+        expires: int = -1,
+        same_site: str = ""
     ) -> None:
         _validate_cookie_token(name)
         _validate_cookie_token(value)
@@ -47,6 +56,13 @@ class Cookie:
         self.secure = secure
         self.http_only = http_only
         self.host_only = host_only
+        self.expires = expires
+        self.same_site = same_site
+
+    def is_expired(self: Cookie, now_s: int) -> bool:
+        if self.expires < 0:
+            return False
+        return self.expires <= now_s
 
     def matches_domain(self: Cookie, target_host: str) -> bool:
         if len(self.domain) == 0:
@@ -95,9 +111,50 @@ class Cookie:
 
 class CookieJar:
     cookies: list[Cookie]
+    extra_suffixes: list[str]
+    now_override_s: int   # deterministic clock for tests; -1 = real clock
 
     def __init__(self: CookieJar) -> None:
         self.cookies = []
+        self.extra_suffixes = []
+        self.now_override_s = -1
+
+    def now_s(self: CookieJar) -> int:
+        if self.now_override_s >= 0:
+            return self.now_override_s
+        return nox.time.now_ms() // 1000
+
+    # Extend the embedded public-suffix subset with an application-specific suffix.
+    def add_public_suffix(self: CookieJar, suffix: str) -> None:
+        l: list[str] = self.extra_suffixes
+        l.append(nox.strings.lower(suffix))
+        self.extra_suffixes = l
+
+    def _is_public_suffix(self: CookieJar, domain: str) -> bool:
+        if is_public_suffix(domain):
+            return True
+        d: str = nox.strings.lower(domain)
+        i: int = 0
+        while i < len(self.extra_suffixes):
+            if self.extra_suffixes[i] == d:
+                return True
+            i = i + 1
+        return False
+
+    def purge_expired(self: CookieJar) -> int:
+        now: int = self.now_s()
+        keep: list[Cookie] = []
+        removed: int = 0
+        i: int = 0
+        while i < len(self.cookies):
+            c: Cookie = self.cookies[i]
+            if c.is_expired(now):
+                removed = removed + 1
+            else:
+                keep.append(c)
+            i = i + 1
+        self.cookies = keep
+        return removed
 
     def set_cookie(self: CookieJar, c: Cookie) -> None:
         # Unique identity: (name, domain, path)
@@ -120,9 +177,11 @@ class CookieJar:
         path: str = "/",
         secure: bool = False,
         http_only: bool = False,
-        host_only: bool = False
+        host_only: bool = False,
+        expires: int = -1,
+        same_site: str = ""
     ) -> None:
-        c: Cookie = Cookie(name, value, domain, path, secure, http_only, host_only)
+        c: Cookie = Cookie(name, value, domain, path, secure, http_only, host_only, expires, same_site)
         self.set_cookie(c)
 
     def get(self: CookieJar, name: str, domain: str = "", path: str = "") -> str | None:
@@ -160,11 +219,31 @@ class CookieJar:
     def clear(self: CookieJar) -> None:
         self.cookies = []
 
+    # Handles one or many Set-Cookie header values. Multiple values are expected separated by
+    # "\n" (the Nox runtime's convention for repeated headers, see nox.http.multi).
     def extract_from_response(self: CookieJar, target_url: str, resp_headers: Headers) -> None:
-        raw_cookie: str = resp_headers.get("Set-Cookie", "")
-        if len(raw_cookie) == 0:
+        raw_all: str = resp_headers.get("Set-Cookie", "")
+        if len(raw_all) == 0:
             return
+        lines: list[str] = nox.strings.split(raw_all, "\n")
+        k: int = 0
+        while k < len(lines):
+            one: str = nox.strings.trim(lines[k])
+            if len(one) > 0:
+                self._process_set_cookie(target_url, one)
+            k = k + 1
 
+    def _default_path(self: CookieJar, request_path: str) -> str:
+        if len(request_path) == 0 or request_path[0:1] != "/":
+            return "/"
+        last: int = len(request_path) - 1
+        while last > 0 and request_path[last:last + 1] != "/":
+            last = last - 1
+        if last <= 0:
+            return "/"
+        return request_path[0:last]
+
+    def _process_set_cookie(self: CookieJar, target_url: str, raw_cookie: str) -> None:
         target: URL = nox.url.parse(target_url)
         request_host: str = nox.strings.lower(target.host)
         parts: list[str] = nox.strings.split(raw_cookie, ";")
@@ -180,11 +259,16 @@ class CookieJar:
         val: str = nox.strings.trim(first[eq + 1:])
 
         cookie_domain: str = request_host
-        cookie_path: str = "/"
+        cookie_path: str = self._default_path(target.path)
         cookie_secure: bool = False
         cookie_http_only: bool = False
         has_explicit_domain: bool = False
         explicit_domain: str = ""
+        same_site: str = ""
+        expires_s: int = -1
+        has_expires: bool = False
+        max_age_s: int = 0
+        has_max_age: bool = False
 
         i: int = 1
         while i < len(parts):
@@ -199,29 +283,54 @@ class CookieJar:
                         cand = cand[1:]
                     cand = nox.strings.trim(cand)
 
-                    # Public Suffix / TLD rejection:
-                    # A domain attribute without a dot (e.g. "com", "net", "org") is a public suffix
-                    # and must be rejected per RFC 6265 §5.3.
-                    if nox.strings.index_of(cand, ".") < 0:
-                        return
+                    # Public suffix (embedded PSL subset + user extensions).
+                    # Exactly-equal host on a public suffix degrades to host-only (RFC 6265 §5.3.5).
+                    if self._is_public_suffix(cand):
+                        if request_host != cand:
+                            return
+                        cand = ""
 
-                    # RFC 6265 §5.3 Step 5 (Domain Acceptance Validation):
-                    # The request host must domain-match the domain attribute.
-                    # E.g. request_host "evil.example.net" cannot set Domain="example.com".
-                    # E.g. request_host "example.com" cannot set Domain="sub.example.com".
-                    matches_cand: bool = (request_host == cand)
-                    if not matches_cand:
-                        dot_cand: str = "." + cand
-                        matches_cand = nox.strings.ends_with(request_host, dot_cand)
-
-                    if not matches_cand:
-                        # Reject cookie completely
-                        return
-
-                    has_explicit_domain = True
-                    explicit_domain = cand
+                    if len(cand) > 0:
+                        # Request host must domain-match the Domain attribute (RFC 6265 §5.3 step 6).
+                        matches_cand: bool = (request_host == cand)
+                        if not matches_cand:
+                            dot_cand: str = "." + cand
+                            matches_cand = nox.strings.ends_with(request_host, dot_cand)
+                        if not matches_cand:
+                            return
+                        has_explicit_domain = True
+                        explicit_domain = cand
                 elif dkey == "path":
-                    cookie_path = dval
+                    if len(dval) > 0 and dval[0:1] == "/":
+                        cookie_path = dval
+                elif dkey == "expires":
+                    ev: int = parse_http_date(dval)
+                    if ev >= 0:
+                        expires_s = ev
+                        has_expires = True
+                elif dkey == "max-age":
+                    sign_ok: bool = True
+                    digits: str = dval
+                    neg: bool = False
+                    if nox.strings.starts_with(digits, "-"):
+                        neg = True
+                        digits = digits[1:]
+                    if len(digits) == 0:
+                        sign_ok = False
+                    q: int = 0
+                    while q < len(digits):
+                        bb: int = nox.strings.byte_at(digits, q)
+                        if bb < 48 or bb > 57:
+                            sign_ok = False
+                        q = q + 1
+                    if sign_ok:
+                        mv: int = int(digits)
+                        if neg:
+                            mv = 0
+                        max_age_s = mv
+                        has_max_age = True
+                elif dkey == "samesite":
+                    same_site = nox.strings.lower(dval)
             else:
                 dflag: str = nox.strings.lower(p)
                 if dflag == "secure":
@@ -235,7 +344,36 @@ class CookieJar:
             cookie_domain = explicit_domain
             is_host_only = False
 
-        self.set(name, val, cookie_domain, cookie_path, cookie_secure, cookie_http_only, is_host_only)
+        # Max-Age wins over Expires (RFC 6265 §5.3 step 3).
+        final_expires: int = -1
+        now: int = self.now_s()
+        if has_max_age:
+            final_expires = now + max_age_s
+            if max_age_s <= 0:
+                final_expires = 0
+        elif has_expires:
+            final_expires = expires_s
+            if final_expires < 0:
+                final_expires = 0
+
+        # An expired cookie deletes the stored one with the same identity.
+        if final_expires >= 0 and final_expires <= now:
+            self._remove_identity(name, cookie_domain, cookie_path)
+            return
+
+        self.set(name, val, cookie_domain, cookie_path, cookie_secure, cookie_http_only, is_host_only, final_expires, same_site)
+
+    def _remove_identity(self: CookieJar, name: str, domain: str, path: str) -> None:
+        keep: list[Cookie] = []
+        i: int = 0
+        while i < len(self.cookies):
+            c: Cookie = self.cookies[i]
+            if c.name == name and c.domain == domain and c.path == path:
+                i = i + 1
+                continue
+            keep.append(c)
+            i = i + 1
+        self.cookies = keep
 
     def to_cookie_header(self: CookieJar, target_url: str = "") -> str:
         if len(self.cookies) == 0:
@@ -257,6 +395,9 @@ class CookieJar:
         i: int = 0
         while i < len(self.cookies):
             c: Cookie = self.cookies[i]
+            if c.is_expired(self.now_s()):
+                i = i + 1
+                continue
             if len(target_url) > 0:
                 if not c.matches_domain(target_host):
                     i = i + 1

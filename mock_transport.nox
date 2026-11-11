@@ -1,0 +1,102 @@
+# mock_transport.nox — Deterministic in-memory Transport for tests (no network).
+#
+# Responses are served either from per-URL routes or from a FIFO queue. Every executed request is
+# recorded in `requests` so tests can assert on headers/bodies (e.g. credential-leak checks).
+
+import request
+from request import Request
+import response
+from response import Response
+import stream
+from stream import StreamResponse
+import headers
+from headers import Headers, response_headers_from_dict
+import transport
+from transport import Transport
+import errors
+from errors import TransportError
+
+class MockTransport(Transport):
+    requests: list[Request]
+    queue: list[Response]
+    queue_errors: list[str]
+    route_urls: list[str]
+    route_responses: list[Response]
+    cursor: int
+
+    def __init__(self: MockTransport) -> None:
+        self.requests = []
+        self.queue = []
+        self.queue_errors = []
+        self.route_urls = []
+        self.route_responses = []
+        self.cursor = 0
+
+    def add_response(self: MockTransport, status: int, body: str = "", hdrs: dict[str, str] | None = None) -> MockTransport:
+        h: Headers = Headers()
+        if hdrs is not None:
+            h = response_headers_from_dict(hdrs)
+        q: list[Response] = self.queue
+        q.append(Response(status, body, h, "", "", 0))
+        self.queue = q
+        e: list[str] = self.queue_errors
+        e.append("")
+        self.queue_errors = e
+        return self
+
+    # Queue a transport failure (raises TransportError when its turn comes).
+    def add_error(self: MockTransport, message: str) -> MockTransport:
+        q: list[Response] = self.queue
+        q.append(Response(0, "", Headers(), "", "", 0))
+        self.queue = q
+        e: list[str] = self.queue_errors
+        e.append(message)
+        self.queue_errors = e
+        return self
+
+    def route(self: MockTransport, url: str, status: int, body: str = "", hdrs: dict[str, str] | None = None) -> MockTransport:
+        h: Headers = Headers()
+        if hdrs is not None:
+            h = response_headers_from_dict(hdrs)
+        u: list[str] = self.route_urls
+        u.append(url)
+        self.route_urls = u
+        r: list[Response] = self.route_responses
+        r.append(Response(status, body, h, url, "", 0))
+        self.route_responses = r
+        return self
+
+    def request_count(self: MockTransport) -> int:
+        return len(self.requests)
+
+    def last_request(self: MockTransport) -> Request:
+        return self.requests[len(self.requests) - 1]
+
+    def _next(self: MockTransport, req: Request) -> Response:
+        recorded: list[Request] = self.requests
+        recorded.append(req)
+        self.requests = recorded
+
+        i: int = 0
+        while i < len(self.route_urls):
+            if self.route_urls[i] == req.url:
+                t: Response = self.route_responses[i]
+                return Response(t.status_code, t.body, t.headers.clone(), req.url, req.method, 0)
+            i = i + 1
+
+        if self.cursor >= len(self.queue):
+            raise TransportError("MockTransport: no response configured for " + req.method + " " + req.url)
+        idx: int = self.cursor
+        self.cursor = self.cursor + 1
+        msg: str = self.queue_errors[idx]
+        if len(msg) > 0:
+            raise TransportError(msg)
+        tpl: Response = self.queue[idx]
+        return Response(tpl.status_code, tpl.body, tpl.headers.clone(), req.url, req.method, 0)
+
+    def execute(self: MockTransport, req: Request) -> Response:
+        return self._next(req)
+
+    def stream(self: MockTransport, req: Request) -> StreamResponse:
+        r: Response = self._next(req)
+        return StreamResponse(r.status_code, r.headers, req.url, req.method, r.body, None)

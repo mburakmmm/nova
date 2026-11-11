@@ -1,0 +1,90 @@
+# tests/unit/stream_lazy_test.nox — lazy read_line / for_each_line / for_each_chunk.
+
+import nox.test
+import stream
+from stream import StreamResponse, LineHandler, ChunkHandler
+import headers
+from headers import Headers
+import errors
+from errors import DecodeError
+
+class Collector(LineHandler):
+    lines: list[str]
+    stop_after: int
+    def __init__(self: Collector, stop_after: int = -1) -> None:
+        self.lines = []
+        self.stop_after = stop_after
+    def on_line(self: Collector, line: str) -> bool:
+        l: list[str] = self.lines
+        l.append(line)
+        self.lines = l
+        if self.stop_after > 0 and len(self.lines) >= self.stop_after:
+            return False
+        return True
+
+class Counter(ChunkHandler):
+    total: int
+    calls: int
+    def __init__(self: Counter) -> None:
+        self.total = 0
+        self.calls = 0
+    def on_chunk(self: Counter, chunk: str) -> bool:
+        self.total = self.total + len(chunk)
+        self.calls = self.calls + 1
+        return True
+
+h: Headers = Headers()
+s: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "a\nbb\r\nccc\n\ndddd")
+col: Collector = Collector()
+n: int = s.for_each_line(col)
+nox.test.assert_eq_int(n, 5, "five lines incl. empty and unterminated tail")
+nox.test.assert_eq_str(col.lines[0], "a", "line 1")
+nox.test.assert_eq_str(col.lines[1], "bb", "CRLF stripped")
+nox.test.assert_eq_str(col.lines[3], "", "empty line preserved")
+nox.test.assert_eq_str(col.lines[4], "dddd", "unterminated final line returned")
+
+# Small-chunk path: lines spanning chunk boundaries (read_chunk is 4096, so build a long body)
+body: str = ""
+i: int = 0
+while i < 3000:
+    body = body + "line-" + str(i) + "\n"
+    i = i + 1
+s2: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", body)
+col2: Collector = Collector()
+nox.test.assert_eq_int(s2.for_each_line(col2), 3000, "3000 lines across many chunks")
+nox.test.assert_eq_str(col2.lines[2999], "line-2999", "last line intact across chunk boundary")
+nox.test.assert_eq_str(col2.lines[1500], "line-1500", "middle line intact")
+
+# Early stop is lazy: remaining data stays unread
+s3: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "1\n2\n3\n4\n5\n")
+col3: Collector = Collector(2)
+nox.test.assert_eq_int(s3.for_each_line(col3), 2, "handler stopped after 2")
+nox.test.assert_eq_str(col3.lines[1], "2", "second line collected")
+nl: str | None = s3.read_line()
+nox.test.assert_true(nl is not None, "stream still readable after early stop")
+
+# read_line pull API
+s4: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "x\ny")
+l1: str | None = s4.read_line()
+l2: str | None = s4.read_line()
+l3: str | None = s4.read_line()
+nox.test.assert_true(l1 is not None and l2 is not None, "two lines available")
+nox.test.assert_true(l3 is None, "None at EOF")
+
+# max_line_bytes enforced
+s5: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "0123456789012345678901234567890123456789")
+s5.max_line_bytes = 8
+too_long: bool = False
+try:
+    s5.read_line()
+except DecodeError as de:
+    too_long = True
+nox.test.assert_true(too_long, "over-long line rejected (bounded memory)")
+
+# for_each_chunk
+s6: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "abcdefghij")
+cnt: Counter = Counter()
+nox.test.assert_eq_int(s6.for_each_chunk(cnt, 3), 10, "10 bytes consumed")
+nox.test.assert_eq_int(cnt.calls, 4, "chunks of 3,3,3,1")
+
+print("stream_lazy_test passed")

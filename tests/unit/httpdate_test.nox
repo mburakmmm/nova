@@ -1,0 +1,18 @@
+# tests/unit/httpdate_test.nox — HTTP-date parsing (IMF-fixdate, RFC 850, asctime).
+
+import nox.test
+import httpdate
+from httpdate import parse_http_date, days_from_civil
+
+nox.test.assert_eq_int(days_from_civil(1970, 1, 1), 0, "epoch day 0")
+nox.test.assert_eq_int(parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT"), 784111777, "IMF-fixdate")
+nox.test.assert_eq_int(parse_http_date("Sunday, 06-Nov-94 08:49:37 GMT"), 784111777, "RFC 850")
+nox.test.assert_eq_int(parse_http_date("Sun Nov  6 08:49:37 1994"), 784111777, "asctime")
+nox.test.assert_eq_int(parse_http_date("Thu, 01 Jan 1970 00:00:00 GMT"), 0, "epoch")
+nox.test.assert_eq_int(parse_http_date("Sat, 29 Feb 2020 12:00:00 GMT"), 1582977600, "leap day")
+nox.test.assert_eq_int(parse_http_date("garbage"), -1, "garbage invalid")
+nox.test.assert_eq_int(parse_http_date(""), -1, "empty invalid")
+nox.test.assert_eq_int(parse_http_date("Sun, 31 Feb 2021 00:00:00 GMT"), -1, "impossible date invalid")
+nox.test.assert_eq_int(parse_http_date("Sun, 06 Nov 1994 25:00:00 GMT"), -1, "bad hour invalid")
+
+print("httpdate_test passed")

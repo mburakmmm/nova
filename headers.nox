@@ -60,6 +60,28 @@ class Headers:
         self.entries[low] = value
         self.display_names[low] = name
 
+    # Repeated headers (Set-Cookie, ...) are stored joined by "\n" — the Nox runtime's convention
+    # for duplicate headers (see nox.http.multi). Each part is validated individually, so CR/LF
+    # injection is still impossible; "\n" is only ever produced by this method.
+    def set_multi(self: Headers, name: str, values: list[str]) -> None:
+        out: str = ""
+        i: int = 0
+        while i < len(values):
+            validate_header_entry(name, values[i])
+            if i > 0:
+                out = out + "\n"
+            out = out + values[i]
+            i = i + 1
+        low: str = nox.strings.lower(name)
+        self.entries[low] = out
+        self.display_names[low] = name
+
+    def get_all(self: Headers, name: str) -> list[str]:
+        low: str = nox.strings.lower(name)
+        if low not in self.entries:
+            return []
+        return nox.strings.split(self.entries[low], "\n")
+
     def get(self: Headers, name: str, default: str = "") -> str:
         low: str = nox.strings.lower(name)
         if low in self.entries:
@@ -101,8 +123,22 @@ class Headers:
         for low in self.entries:
             orig_name: str = self.display_names[low]
             val: str = self.entries[low]
-            h.set(orig_name, val)
+            if nox.strings.index_of(val, "\n") >= 0:
+                h.set_multi(orig_name, nox.strings.split(val, "\n"))
+            else:
+                h.set(orig_name, val)
         return h
+
+# Builds RESPONSE headers: a value containing "\n" is a multi-valued header (each part validated).
+def response_headers_from_dict(d: dict[str, str]) -> Headers:
+    h: Headers = Headers()
+    for k in d:
+        v: str = d[k]
+        if nox.strings.index_of(v, "\n") >= 0:
+            h.set_multi(k, nox.strings.split(v, "\n"))
+        else:
+            h.set(k, v)
+    return h
 
 def headers_from_dict(d: dict[str, str]) -> Headers:
     h: Headers = Headers()

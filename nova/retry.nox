@@ -1,2 +1,2 @@
 import retry
-from retry import RetryPolicy
+from retry import RetryPolicy, parse_retry_after_ms

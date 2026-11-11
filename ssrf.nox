@@ -1,4 +1,12 @@
 # ssrf.nox — Server-Side Request Forgery (SSRF) defense shield per AGENTS.md §17.
+#
+# Layers implemented in Nova:
+#   1. URL / hostname policy (allowlist, blocklist, dangerous names, strict-hostname mode).
+#   2. Real IPv4 / IPv6 parsing (inet_aton forms, compressed IPv6, mapped / NAT64 / 6to4).
+#   3. Resolved-IP validation through a pluggable HostResolver (DNS-based SSRF).
+#
+# NOT implemented (requires Nox runtime support, see NOX_LIMITATIONS.md §14):
+#   - A built-in DNS resolver and connecting to the *validated* IP (DNS rebinding TOCTOU).
 
 import nox.strings
 import nox.url
@@ -6,59 +14,333 @@ from nox.url import URL
 import errors
 from errors import SSRFSecurityError
 
-def _is_all_digits(s: str) -> bool:
-    if len(s) == 0:
-        return False
-    i: int = 0
+# ---------------------------------------------------------------------------
+# Number helpers
+# ---------------------------------------------------------------------------
+
+def _digit_val(b: int) -> int:
+    if b >= 48 and b <= 57:
+        return b - 48
+    if b >= 97 and b <= 102:
+        return b - 97 + 10
+    if b >= 65 and b <= 70:
+        return b - 65 + 10
+    return -1
+
+# Parses an unsigned number in inet_aton notation: decimal, 0x hex, 0 octal.
+# Returns -1 when invalid.
+def _parse_c_number(s: str) -> int:
     n: int = len(s)
-    while i < n:
-        b: int = nox.strings.byte_at(s, i)
-        if b < 48 or b > 57:
-            return False
-        i = i + 1
-    return True
-
-class IPv4Address:
-    is_valid: bool
-    o1: int
-    o2: int
-    o3: int
-    o4: int
-
-    def __init__(self: IPv4Address, is_valid: bool, o1: int = 0, o2: int = 0, o3: int = 0, o4: int = 0) -> None:
-        self.is_valid = is_valid
-        self.o1 = o1
-        self.o2 = o2
-        self.o3 = o3
-        self.o4 = o4
-
-def parse_ipv4(host: str) -> IPv4Address:
-    parts: list[str] = nox.strings.split(host, ".")
-    if len(parts) != 4:
-        return IPv4Address(False)
-
+    if n == 0:
+        return -1
+    base: int = 10
     i: int = 0
-    while i < 4:
-        if not _is_all_digits(parts[i]):
-            return IPv4Address(False)
+    if n >= 2 and nox.strings.byte_at(s, 0) == 48 and (nox.strings.byte_at(s, 1) == 120 or nox.strings.byte_at(s, 1) == 88):
+        base = 16
+        i = 2
+        if n == 2:
+            return -1
+    elif n >= 2 and nox.strings.byte_at(s, 0) == 48:
+        base = 8
+        i = 1
+    value: int = 0
+    while i < n:
+        d: int = _digit_val(nox.strings.byte_at(s, i))
+        if d < 0 or d >= base:
+            return -1
+        value = value * base + d
+        if value > 4294967295:
+            return -1
         i = i + 1
+    return value
 
-    v1: int = int(parts[0])
-    v2: int = int(parts[1])
-    v3: int = int(parts[2])
-    v4: int = int(parts[3])
+def _parse_hex_group(s: str) -> int:
+    n: int = len(s)
+    if n == 0 or n > 4:
+        return -1
+    value: int = 0
+    i: int = 0
+    while i < n:
+        d: int = _digit_val(nox.strings.byte_at(s, i))
+        if d < 0:
+            return -1
+        value = value * 16 + d
+        i = i + 1
+    return value
 
-    if v1 < 0 or v1 > 255 or v2 < 0 or v2 > 255 or v3 < 0 or v3 > 255 or v4 < 0 or v4 > 255:
-        return IPv4Address(False)
+# ---------------------------------------------------------------------------
+# IP address model & parsing
+# ---------------------------------------------------------------------------
 
-    return IPv4Address(True, v1, v2, v3, v4)
+class IPAddress:
+    is_valid: bool
+    is_v6: bool
+    octets: list[int]   # 4 entries when IPv4
+    groups: list[int]   # 8 entries (16-bit) when IPv6
+
+    def __init__(self: IPAddress, is_valid: bool, is_v6: bool, octets: list[int], groups: list[int]) -> None:
+        self.is_valid = is_valid
+        self.is_v6 = is_v6
+        self.octets = octets
+        self.groups = groups
+
+def _invalid_ip() -> IPAddress:
+    return IPAddress(False, False, [], [])
+
+def _v4_from_int(v: int) -> IPAddress:
+    o: list[int] = [(v // 16777216) % 256, (v // 65536) % 256, (v // 256) % 256, v % 256]
+    return IPAddress(True, False, o, [])
+
+# inet_aton-compatible IPv4 parser: 1-4 parts, decimal / octal / hex.
+def parse_ip_v4(host: str) -> IPAddress:
+    if len(host) == 0:
+        return _invalid_ip()
+    parts: list[str] = nox.strings.split(host, ".")
+    cnt: int = len(parts)
+    if cnt < 1 or cnt > 4:
+        return _invalid_ip()
+    nums: list[int] = []
+    i: int = 0
+    while i < cnt:
+        v: int = _parse_c_number(parts[i])
+        if v < 0:
+            return _invalid_ip()
+        nums.append(v)
+        i = i + 1
+    # All but last must fit one byte; last fills remaining bytes.
+    j: int = 0
+    while j < cnt - 1:
+        if nums[j] > 255:
+            return _invalid_ip()
+        j = j + 1
+    last: int = nums[cnt - 1]
+    limit: int = 1
+    k: int = 0
+    while k < 5 - cnt:
+        limit = limit * 256
+        k = k + 1
+    if last >= limit:
+        return _invalid_ip()
+    total: int = 0
+    m: int = 0
+    while m < cnt - 1:
+        shift: int = 1
+        s2: int = 0
+        while s2 < 3 - m:
+            shift = shift * 256
+            s2 = s2 + 1
+        total = total + nums[m] * shift
+        m = m + 1
+    total = total + last
+    return _v4_from_int(total)
+
+def _parse_group_list(s: str) -> list[int]:
+    # returns [-1] on failure; handles trailing dotted IPv4.
+    out: list[int] = []
+    if len(s) == 0:
+        return out
+    parts: list[str] = nox.strings.split(s, ":")
+    idx: int = 0
+    while idx < len(parts):
+        p: str = parts[idx]
+        if nox.strings.index_of(p, ".") >= 0:
+            if idx != len(parts) - 1:
+                return [-1]
+            v4: IPAddress = parse_ip_v4(p)
+            if not v4.is_valid:
+                return [-1]
+            # IPv6 trailer must be strict dotted-quad (4 parts)
+            if len(nox.strings.split(p, ".")) != 4:
+                return [-1]
+            out.append(v4.octets[0] * 256 + v4.octets[1])
+            out.append(v4.octets[2] * 256 + v4.octets[3])
+        else:
+            g: int = _parse_hex_group(p)
+            if g < 0:
+                return [-1]
+            out.append(g)
+        idx = idx + 1
+    return out
+
+def parse_ip_v6(host_in: str) -> IPAddress:
+    host: str = host_in
+    pct: int = nox.strings.index_of(host, "%")
+    if pct >= 0:
+        host = host[0:pct]
+    if nox.strings.index_of(host, ":") < 0:
+        return _invalid_ip()
+    dc: int = nox.strings.index_of(host, "::")
+    groups: list[int] = []
+    if dc >= 0:
+        rest: str = host[dc + 2:]
+        if nox.strings.index_of(rest, "::") >= 0:
+            return _invalid_ip()
+        head: list[int] = _parse_group_list(host[0:dc])
+        tail: list[int] = _parse_group_list(rest)
+        if (len(head) == 1 and head[0] == -1) or (len(tail) == 1 and tail[0] == -1):
+            return _invalid_ip()
+        fill: int = 8 - len(head) - len(tail)
+        if fill < 1:
+            return _invalid_ip()
+        a: int = 0
+        while a < len(head):
+            groups.append(head[a])
+            a = a + 1
+        b: int = 0
+        while b < fill:
+            groups.append(0)
+            b = b + 1
+        c: int = 0
+        while c < len(tail):
+            groups.append(tail[c])
+            c = c + 1
+    else:
+        full: list[int] = _parse_group_list(host)
+        if len(full) == 1 and full[0] == -1:
+            return _invalid_ip()
+        if len(full) != 8:
+            return _invalid_ip()
+        groups = full
+    if len(groups) != 8:
+        return _invalid_ip()
+    return IPAddress(True, True, [], groups)
+
+def parse_ip(host_in: str) -> IPAddress:
+    host: str = nox.strings.lower(host_in)
+    if nox.strings.starts_with(host, "[") and nox.strings.ends_with(host, "]"):
+        host = host[1:len(host) - 1]
+    if nox.strings.index_of(host, ":") >= 0:
+        return parse_ip_v6(host)
+    return parse_ip_v4(host)
+
+# Backwards-compatible alias.
+def parse_ipv4(host: str) -> IPAddress:
+    return parse_ip_v4(host)
+
+# ---------------------------------------------------------------------------
+# Classification
+# ---------------------------------------------------------------------------
+
+# Returns one of: "", "loopback", "link_local", "private", "reserved".
+def _classify_v4(o: list[int]) -> str:
+    a: int = o[0]
+    b: int = o[1]
+    c: int = o[2]
+    if a == 127 or a == 0:
+        return "loopback"
+    if a == 169 and b == 254:
+        return "link_local"
+    if a == 10:
+        return "private"
+    if a == 172 and b >= 16 and b <= 31:
+        return "private"
+    if a == 192 and b == 168:
+        return "private"
+    if a == 100 and b >= 64 and b <= 127:
+        return "private"
+    if a == 192 and b == 0 and c == 0:
+        return "private"
+    if a == 198 and (b == 18 or b == 19):
+        return "private"
+    if (a == 192 and b == 0 and c == 2) or (a == 198 and b == 51 and c == 100) or (a == 203 and b == 0 and c == 113):
+        return "reserved"
+    if a >= 224:
+        return "reserved"
+    return ""
+
+def _v4_from_groups(hi: int, lo: int) -> list[int]:
+    return [hi // 256, hi % 256, lo // 256, lo % 256]
+
+def _classify_v6(g: list[int]) -> str:
+    all_zero_first6: bool = g[0] == 0 and g[1] == 0 and g[2] == 0 and g[3] == 0 and g[4] == 0
+    # :: unspecified and ::1 loopback
+    if all_zero_first6 and g[5] == 0 and g[6] == 0 and g[7] == 0:
+        return "loopback"
+    if all_zero_first6 and g[5] == 0 and g[6] == 0 and g[7] == 1:
+        return "loopback"
+    # IPv4-mapped ::ffff:a.b.c.d
+    if all_zero_first6 and g[5] == 65535:
+        return _classify_v4(_v4_from_groups(g[6], g[7]))
+    # IPv4-compatible (deprecated) ::a.b.c.d
+    if all_zero_first6 and g[5] == 0:
+        return _classify_v4(_v4_from_groups(g[6], g[7]))
+    # IPv4-translated ::ffff:0:a.b.c.d (RFC 2765)
+    if g[0] == 0 and g[1] == 0 and g[2] == 0 and g[3] == 0 and g[4] == 65535 and g[5] == 0:
+        return _classify_v4(_v4_from_groups(g[6], g[7]))
+    # NAT64 64:ff9b::/96
+    if g[0] == 100 and g[1] == 65435 and g[2] == 0 and g[3] == 0 and g[4] == 0 and g[5] == 0:
+        return _classify_v4(_v4_from_groups(g[6], g[7]))
+    # 6to4 2002::/16 embeds IPv4 in groups 1-2
+    if g[0] == 8194:
+        return _classify_v4(_v4_from_groups(g[1], g[2]))
+    # Teredo 2001:0::/32 (client IPv4 is obfuscated) — treat as reserved
+    if g[0] == 8193 and g[1] == 0:
+        return "reserved"
+    # Documentation 2001:db8::/32
+    if g[0] == 8193 and g[1] == 3512:
+        return "reserved"
+    # Link-local fe80::/10
+    if g[0] >= 65152 and g[0] <= 65215:
+        return "link_local"
+    # Site-local fec0::/10 (deprecated)
+    if g[0] >= 65216 and g[0] <= 65279:
+        return "private"
+    # Unique local fc00::/7
+    if g[0] >= 64512 and g[0] <= 65023:
+        return "private"
+    # Multicast ff00::/8
+    if g[0] >= 65280:
+        return "reserved"
+    return ""
+
+def classify_ip(ip: IPAddress) -> str:
+    if not ip.is_valid:
+        return ""
+    if ip.is_v6:
+        return _classify_v6(ip.groups)
+    return _classify_v4(ip.octets)
+
+# ---------------------------------------------------------------------------
+# Resolver abstraction (DNS-based SSRF defense)
+# ---------------------------------------------------------------------------
+
+# Base class: Nox has no built-in DNS API yet (see NOX_LIMITATIONS.md §14).
+# Subclass this to plug a resolver; the default resolves nothing.
+class HostResolver:
+    def resolve(self: HostResolver, host: str) -> list[str]:
+        return []
+
+# Deterministic resolver for tests and for pinned host tables.
+class StaticResolver(HostResolver):
+    table: dict[str, list[str]]
+
+    def __init__(self: StaticResolver) -> None:
+        self.table = {}
+
+    def add(self: StaticResolver, host: str, ips: list[str]) -> StaticResolver:
+        t: dict[str, list[str]] = self.table
+        t[nox.strings.lower(host)] = ips
+        self.table = t
+        return self
+
+    def resolve(self: StaticResolver, host: str) -> list[str]:
+        key: str = nox.strings.lower(host)
+        if key in self.table:
+            return self.table[key]
+        return []
+
+# ---------------------------------------------------------------------------
+# Policy
+# ---------------------------------------------------------------------------
 
 class SSRFPolicy:
     allow_private: bool
     allow_loopback: bool
     allow_link_local: bool
+    strict_hostnames: bool
     blocked_hosts: list[str]
     allowed_hosts: list[str]
+    resolver: HostResolver | None
 
     def __init__(
         self: SSRFPolicy,
@@ -69,8 +351,10 @@ class SSRFPolicy:
         self.allow_private = allow_private
         self.allow_loopback = allow_loopback
         self.allow_link_local = allow_link_local
+        self.strict_hostnames = False
         self.blocked_hosts = []
         self.allowed_hosts = []
+        self.resolver = None
 
     def block_host(self: SSRFPolicy, host: str) -> SSRFPolicy:
         blist: list[str] = self.blocked_hosts
@@ -82,6 +366,18 @@ class SSRFPolicy:
         alist: list[str] = self.allowed_hosts
         alist.append(nox.strings.lower(host))
         self.allowed_hosts = alist
+        return self
+
+    # Plug a DNS resolver: hostnames are resolved and EVERY returned IP is validated.
+    # Fail-closed: a hostname that resolves to nothing is rejected.
+    def set_resolver(self: SSRFPolicy, r: HostResolver) -> SSRFPolicy:
+        self.resolver = r
+        return self
+
+    # Strict mode: only IP literals (validated) and explicitly allowed hostnames pass.
+    # This is the strongest protection available without runtime IP pinning.
+    def set_strict_hostnames(self: SSRFPolicy, enabled: bool = True) -> SSRFPolicy:
+        self.strict_hostnames = enabled
         return self
 
     def is_host_allowed_explicitly(self: SSRFPolicy, host_lower: str) -> bool:
@@ -100,14 +396,41 @@ class SSRFPolicy:
             i = i + 1
         return False
 
+    def _check_ip(self: SSRFPolicy, target_url: str, raw_host: str, ip: IPAddress, label: str) -> None:
+        cat: str = classify_ip(ip)
+        if cat == "loopback" and not self.allow_loopback:
+            raise SSRFSecurityError(target_url, raw_host, "Loopback address blocked by SSRF policy (" + label + "): " + raw_host)
+        if cat == "link_local" and not self.allow_link_local:
+            raise SSRFSecurityError(target_url, raw_host, "Link-local / cloud metadata address blocked by SSRF policy (" + label + "): " + raw_host)
+        if cat == "private" and not self.allow_private:
+            raise SSRFSecurityError(target_url, raw_host, "Private IP address blocked by SSRF policy (" + label + "): " + raw_host)
+        if cat == "reserved" and not self.allow_private:
+            raise SSRFSecurityError(target_url, raw_host, "Multicast or reserved IP address blocked by SSRF policy (" + label + "): " + raw_host)
+
+    # Validates a set of already-resolved IP strings for a host. Public so callers that
+    # own a resolver (or a runtime hook) can enforce the post-DNS check themselves.
+    def validate_resolved(self: SSRFPolicy, target_url: str, host: str, ip_strings: list[str]) -> None:
+        if len(ip_strings) == 0:
+            raise SSRFSecurityError(target_url, host, "Hostname did not resolve to any address: " + host)
+        i: int = 0
+        while i < len(ip_strings):
+            ip: IPAddress = parse_ip(ip_strings[i])
+            if not ip.is_valid:
+                raise SSRFSecurityError(target_url, host, "Resolver returned an invalid IP address for " + host)
+            self._check_ip(target_url, host, ip, "resolved " + host + " -> " + ip_strings[i])
+            i = i + 1
+
     def validate_target(self: SSRFPolicy, target_url: str) -> None:
         u: URL = nox.url.parse(target_url)
         raw_host: str = u.host
         host_lower: str = nox.strings.lower(raw_host)
 
-        # Strip IPv6 brackets if present
         if nox.strings.starts_with(host_lower, "[") and nox.strings.ends_with(host_lower, "]"):
             host_lower = host_lower[1:len(host_lower) - 1]
+
+        # Trailing-dot FQDN form (localhost.) must not bypass name checks.
+        while len(host_lower) > 1 and nox.strings.ends_with(host_lower, "."):
+            host_lower = host_lower[0:len(host_lower) - 1]
 
         # 1. Explicit allowlist check
         if self.is_host_allowed_explicitly(host_lower):
@@ -117,83 +440,27 @@ class SSRFPolicy:
         if self.is_host_blocked_explicitly(host_lower):
             raise SSRFSecurityError(target_url, raw_host, "Host is in explicit SSRF blocklist: " + raw_host)
 
-        # 3. Known dangerous hostnames & Cloud Metadata names
+        # 3. Known dangerous hostnames & cloud metadata names
         if host_lower == "localhost" or nox.strings.ends_with(host_lower, ".localhost"):
             if not self.allow_loopback:
                 raise SSRFSecurityError(target_url, raw_host, "Access to localhost is blocked by SSRF policy")
 
-        if host_lower == "metadata.google.internal" or host_lower == "instance-data":
+        if host_lower == "metadata.google.internal" or host_lower == "instance-data" or host_lower == "metadata":
             if not self.allow_link_local:
                 raise SSRFSecurityError(target_url, raw_host, "Access to cloud metadata service is blocked by SSRF policy")
 
-        # 4. IPv4 Literal checks
-        ip: IPv4Address = parse_ipv4(host_lower)
+        # 4. IP literal (any notation): real parse + classification
+        ip: IPAddress = parse_ip(host_lower)
         if ip.is_valid:
-            # Loopback: 127.0.0.0/8 or 0.0.0.0/8
-            if ip.o1 == 127 or ip.o1 == 0:
-                if not self.allow_loopback:
-                    raise SSRFSecurityError(target_url, raw_host, "Loopback address blocked by SSRF policy: " + raw_host)
+            self._check_ip(target_url, raw_host, ip, "literal")
+            return
 
-            # Link-Local / Cloud Instance Metadata: 169.254.0.0/16 (e.g. 169.254.169.254)
-            if ip.o1 == 169 and ip.o2 == 254:
-                if not self.allow_link_local:
-                    raise SSRFSecurityError(target_url, raw_host, "Link-local / cloud metadata address blocked by SSRF policy: " + raw_host)
+        # 5. Hostname: strict mode rejects everything not explicitly allowed
+        if self.strict_hostnames:
+            raise SSRFSecurityError(target_url, raw_host, "Hostname not in allowlist (strict SSRF mode): " + raw_host)
 
-            # Private RFC 1918:
-            # 10.0.0.0/8
-            # 172.16.0.0/12 (172.16.x.x - 172.31.x.x)
-            # 192.168.0.0/16
-            is_priv: bool = False
-            if ip.o1 == 10:
-                is_priv = True
-            elif ip.o1 == 172 and ip.o2 >= 16 and ip.o2 <= 31:
-                is_priv = True
-            elif ip.o1 == 192 and ip.o2 == 168:
-                is_priv = True
-            elif ip.o1 == 100 and ip.o2 >= 64 and ip.o2 <= 127: # Carrier-grade NAT RFC 6598
-                is_priv = True
-
-            if is_priv and not self.allow_private:
-                raise SSRFSecurityError(target_url, raw_host, "Private RFC 1918 IP address blocked by SSRF policy: " + raw_host)
-
-            # Multicast / Reserved
-            if ip.o1 >= 224 and not self.allow_private:
-                raise SSRFSecurityError(target_url, raw_host, "Multicast or reserved IP address blocked by SSRF policy: " + raw_host)
-
-        # 5. IPv6 Literal checks
-        if nox.strings.index_of(host_lower, ":") >= 0:
-            # Loopback: ::1 or 0:0:0:0:0:0:0:1
-            if host_lower == "::1" or host_lower == "0:0:0:0:0:0:0:1" or host_lower == "::":
-                if not self.allow_loopback:
-                    raise SSRFSecurityError(target_url, raw_host, "IPv6 loopback address blocked by SSRF policy: " + raw_host)
-
-            # Link-Local: fe80::/10 (fe8, fe9, fea, feb)
-            if (
-                nox.strings.starts_with(host_lower, "fe8") or
-                nox.strings.starts_with(host_lower, "fe9") or
-                nox.strings.starts_with(host_lower, "fea") or
-                nox.strings.starts_with(host_lower, "feb")
-            ):
-                if not self.allow_link_local:
-                    raise SSRFSecurityError(target_url, raw_host, "IPv6 link-local address blocked by SSRF policy: " + raw_host)
-
-            # Unique Local: fc00::/7 (fc or fd)
-            if nox.strings.starts_with(host_lower, "fc") or nox.strings.starts_with(host_lower, "fd"):
-                if not self.allow_private:
-                    raise SSRFSecurityError(target_url, raw_host, "IPv6 unique local address blocked by SSRF policy: " + raw_host)
-
-            # IPv4-mapped IPv6: ::ffff:127.0.0.1 or ::ffff:169.254.169.254
-            if nox.strings.starts_with(host_lower, "::ffff:"):
-                mapped_v4: str = host_lower[7:]
-                mapped_ip: IPv4Address = parse_ipv4(mapped_v4)
-                if mapped_ip.is_valid:
-                    if mapped_ip.o1 == 127 and not self.allow_loopback:
-                        raise SSRFSecurityError(target_url, raw_host, "IPv4-mapped loopback blocked by SSRF policy: " + raw_host)
-                    if mapped_ip.o1 == 169 and mapped_ip.o2 == 254 and not self.allow_link_local:
-                        raise SSRFSecurityError(target_url, raw_host, "IPv4-mapped metadata blocked by SSRF policy: " + raw_host)
-                    if (
-                        (mapped_ip.o1 == 10) or
-                        (mapped_ip.o1 == 172 and mapped_ip.o2 >= 16 and mapped_ip.o2 <= 31) or
-                        (mapped_ip.o1 == 192 and mapped_ip.o2 == 168)
-                    ) and not self.allow_private:
-                        raise SSRFSecurityError(target_url, raw_host, "IPv4-mapped private IP blocked by SSRF policy: " + raw_host)
+        # 6. Hostname: post-DNS validation when a resolver is configured
+        r: HostResolver | None = self.resolver
+        if r is not None:
+            ips: list[str] = r.resolve(host_lower)
+            self.validate_resolved(target_url, raw_host, ips)

@@ -1,0 +1,118 @@
+# tests/unit/retry_advanced_test.nox — jitter, Retry-After (seconds & HTTP-date), overflow safety,
+# and end-to-end retry flow through an injected MockTransport (no network, no real sleeping).
+
+import nox.test
+import retry
+from retry import RetryPolicy, parse_retry_after_ms
+import client
+from client import Client
+import response
+from response import Response
+import mock_transport
+from mock_transport import MockTransport
+import errors
+from errors import TransportError, RetryExhaustedError
+
+# --- overflow safety ---
+p: RetryPolicy = RetryPolicy(3, 100, 10000)
+nox.test.assert_eq_int(p.calculate_delay_ms(1000000), 10000, "huge attempt capped, no overflow")
+nox.test.assert_eq_int(p.calculate_delay_ms(64), 10000, "attempt 64 capped")
+nox.test.assert_eq_int(p.calculate_delay_ms(7), 6400, "attempt 7 exact")
+nox.test.assert_eq_int(p.calculate_delay_ms(8), 10000, "attempt 8 capped")
+nox.test.assert_eq_int(RetryPolicy(3, 0, 1000).calculate_delay_ms(5), 0, "zero factor -> zero delay")
+nox.test.assert_eq_int(RetryPolicy(3, 5000, 1000).calculate_delay_ms(1), 1000, "factor above cap clamped")
+
+# --- jitter (deterministic via sample) ---
+j: RetryPolicy = RetryPolicy(3, 100, 10000)
+nox.test.assert_eq_int(j.next_delay_ms(3), 400, "no jitter by default")
+j.set_jitter("full")
+nox.test.assert_eq_int(j.jittered_delay_ms(3, 0), 0, "full jitter sample 0 -> 0")
+nox.test.assert_eq_int(j.jittered_delay_ms(3, 500), 200, "full jitter sample 500 -> half")
+nox.test.assert_eq_int(j.jittered_delay_ms(3, 1000), 400, "full jitter sample 1000 -> full delay")
+j.set_jitter("equal")
+nox.test.assert_eq_int(j.jittered_delay_ms(3, 0), 200, "equal jitter floor = delay/2")
+nox.test.assert_eq_int(j.jittered_delay_ms(3, 1000), 400, "equal jitter ceiling = delay")
+j.jitter_sample_permille = 500
+nox.test.assert_eq_int(j.next_delay_ms(3), 300, "next_delay_ms uses deterministic sample")
+# random sampling stays within bounds
+r: RetryPolicy = RetryPolicy(3, 100, 10000)
+r.set_jitter("full")
+within: bool = True
+k: int = 0
+while k < 50:
+    d: int = r.next_delay_ms(3)
+    if d < 0 or d > 400:
+        within = False
+    k = k + 1
+nox.test.assert_true(within, "random full jitter within [0, delay]")
+
+# --- Retry-After ---
+nox.test.assert_eq_int(parse_retry_after_ms("5", 0), 5000, "delta-seconds")
+nox.test.assert_eq_int(parse_retry_after_ms(" 120 ", 0), 120000, "delta-seconds trimmed")
+nox.test.assert_eq_int(parse_retry_after_ms("0", 0), 0, "zero seconds")
+nox.test.assert_eq_int(parse_retry_after_ms("99999999999999999999", 0), 31536000000, "absurd seconds capped")
+nox.test.assert_eq_int(parse_retry_after_ms("-5", 0), -1, "negative invalid")
+nox.test.assert_eq_int(parse_retry_after_ms("soon", 0), -1, "garbage invalid")
+nox.test.assert_eq_int(parse_retry_after_ms("", 0), -1, "empty invalid")
+nox.test.assert_eq_int(parse_retry_after_ms("Sun, 06 Nov 1994 08:49:47 GMT", 784111777), 10000, "HTTP-date 10s ahead")
+nox.test.assert_eq_int(parse_retry_after_ms("Sun, 06 Nov 1994 08:49:37 GMT", 784111900), 0, "HTTP-date in the past -> 0")
+
+# --- end-to-end with MockTransport ---
+m: MockTransport = MockTransport()
+m.add_response(503, "busy")
+m.add_response(503, "busy")
+m.add_response(200, "ok")
+c: Client = Client()
+c.set_transport(m)
+c.set_retry_policy(RetryPolicy(3, 1, 5))
+res: Response = c.get("https://example.com/r")
+nox.test.assert_eq_int(res.status_code, 200, "succeeds after two 503s")
+nox.test.assert_eq_int(m.request_count(), 3, "exactly three attempts")
+
+# POST is never retried by default
+m2: MockTransport = MockTransport()
+m2.add_response(503, "busy")
+m2.add_response(200, "ok")
+c2: Client = Client()
+c2.set_transport(m2)
+c2.set_retry_policy(RetryPolicy(3, 1, 5))
+res2: Response = c2.post("https://example.com/r", "x")
+nox.test.assert_eq_int(res2.status_code, 503, "POST not retried")
+nox.test.assert_eq_int(m2.request_count(), 1, "single POST attempt")
+
+# Retry-After HTTP-date far in the past -> falls back to computed backoff (still capped)
+m3: MockTransport = MockTransport()
+m3.add_response(429, "slow", {"Retry-After": "Sun, 06 Nov 1994 08:49:37 GMT"})
+m3.add_response(200, "ok")
+c3: Client = Client()
+c3.set_transport(m3)
+c3.set_retry_policy(RetryPolicy(2, 1, 5))
+res3: Response = c3.get("https://example.com/r")
+nox.test.assert_eq_int(res3.status_code, 200, "429 with past HTTP-date retried")
+
+# Retry-After huge value is capped by max_backoff_ms (no sleep DoS)
+m4: MockTransport = MockTransport()
+m4.add_response(503, "busy", {"Retry-After": "86400"})
+m4.add_response(200, "ok")
+c4: Client = Client()
+c4.set_transport(m4)
+c4.set_retry_policy(RetryPolicy(2, 1, 5))
+res4: Response = c4.get("https://example.com/r")
+nox.test.assert_eq_int(res4.status_code, 200, "huge Retry-After capped; test did not sleep a day")
+
+# Transport errors retried then surfaced
+m5: MockTransport = MockTransport()
+m5.add_error("boom")
+m5.add_error("boom")
+c5: Client = Client()
+c5.set_transport(m5)
+c5.set_retry_policy(RetryPolicy(1, 1, 5))
+surfaced: bool = False
+try:
+    c5.get("https://example.com/r")
+except TransportError as te:
+    surfaced = True
+nox.test.assert_true(surfaced, "transport error surfaces after retries are exhausted")
+nox.test.assert_eq_int(m5.request_count(), 2, "initial attempt + one retry")
+
+print("retry_advanced_test passed")

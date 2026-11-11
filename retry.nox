@@ -1,4 +1,43 @@
-# retry.nox — Configurable retry policy with exponential backoff and idempotency protection.
+# retry.nox — Configurable retry policy with exponential backoff, jitter and idempotency protection.
+
+import nox.random
+import nox.strings
+import nox.time
+import httpdate
+from httpdate import parse_http_date
+
+# Largest Retry-After honoured (one year); keeps seconds*1000 far from integer overflow.
+RETRY_AFTER_MAX_SECONDS: int = 31536000
+
+# Parses a Retry-After header value (RFC 9110 §10.2.3): delta-seconds OR an HTTP-date.
+# Returns the delay in milliseconds (>= 0), or -1 when the value is invalid.
+def parse_retry_after_ms(value: str, now_s: int) -> int:
+    v: str = nox.strings.trim(value)
+    if len(v) == 0:
+        return -1
+    all_digits: bool = True
+    i: int = 0
+    while i < len(v):
+        b: int = nox.strings.byte_at(v, i)
+        if b < 48 or b > 57:
+            all_digits = False
+        i = i + 1
+    if all_digits:
+        if len(v) > 9:
+            return RETRY_AFTER_MAX_SECONDS * 1000
+        secs: int = int(v)
+        if secs > RETRY_AFTER_MAX_SECONDS:
+            secs = RETRY_AFTER_MAX_SECONDS
+        return secs * 1000
+    when: int = parse_http_date(v)
+    if when < 0:
+        return -1
+    diff: int = when - now_s
+    if diff <= 0:
+        return 0
+    if diff > RETRY_AFTER_MAX_SECONDS:
+        diff = RETRY_AFTER_MAX_SECONDS
+    return diff * 1000
 
 class RetryPolicy:
     max_retries: int
@@ -6,6 +45,9 @@ class RetryPolicy:
     max_backoff_ms: int
     retry_on_transport_error: bool
     retry_post: bool
+    jitter: str                 # "none" (default), "full" or "equal"
+    jitter_sample_permille: int # -1 = random; 0..1000 = deterministic sample (tests)
+    jitter_seeded: bool
 
     def __init__(
         self: RetryPolicy,
@@ -20,6 +62,9 @@ class RetryPolicy:
         self.max_backoff_ms = max_backoff_ms
         self.retry_on_transport_error = retry_on_transport_error
         self.retry_post = retry_post
+        self.jitter = "none"
+        self.jitter_sample_permille = -1
+        self.jitter_seeded = False
 
     def _is_method_retryable(self: RetryPolicy, method: str) -> bool:
         if method == "GET" or method == "HEAD" or method == "OPTIONS":
@@ -58,17 +103,53 @@ class RetryPolicy:
             return False
         return self.retry_on_transport_error
 
+    # Pure exponential backoff, capped by max_backoff_ms. Overflow-safe: stops doubling as
+    # soon as the cap is reached, so arbitrarily large attempt numbers are cheap and exact.
     def calculate_delay_ms(self: RetryPolicy, attempt: int) -> int:
-        if attempt <= 1:
-            if self.backoff_factor_ms > self.max_backoff_ms:
-                return self.max_backoff_ms
-            return self.backoff_factor_ms
-        multiplier: int = 1
+        cap: int = self.max_backoff_ms
+        base: int = self.backoff_factor_ms
+        if base <= 0:
+            return 0
+        if base >= cap:
+            return cap
+        delay: int = base
         i: int = 1
         while i < attempt:
-            multiplier = multiplier * 2
+            if delay >= cap // 2 + 1:
+                return cap
+            delay = delay * 2
             i = i + 1
-        delay: int = self.backoff_factor_ms * multiplier
-        if delay > self.max_backoff_ms:
-            return self.max_backoff_ms
+        if delay > cap:
+            return cap
         return delay
+
+    # "full" jitter: uniform in [0, delay]; "equal" jitter: delay/2 + uniform [0, delay/2].
+    # `sample_permille` in [0, 1000] makes the result deterministic.
+    def jittered_delay_ms(self: RetryPolicy, attempt: int, sample_permille: int) -> int:
+        d: int = self.calculate_delay_ms(attempt)
+        sp: int = sample_permille
+        if sp < 0:
+            sp = 0
+        if sp > 1000:
+            sp = 1000
+        if self.jitter == "full":
+            return (d * sp) // 1000
+        if self.jitter == "equal":
+            half: int = d // 2
+            return half + ((d - half) * sp) // 1000
+        return d
+
+    def next_delay_ms(self: RetryPolicy, attempt: int) -> int:
+        if self.jitter == "none":
+            return self.calculate_delay_ms(attempt)
+        sp: int = self.jitter_sample_permille
+        if sp < 0:
+            if not self.jitter_seeded:
+                nox.random.seed(nox.time.now_ns())
+                self.jitter_seeded = True
+            sp = nox.random.randint(0, 1000)
+        return self.jittered_delay_ms(attempt, sp)
+
+    def set_jitter(self: RetryPolicy, mode: str) -> RetryPolicy:
+        self.jitter = mode
+        return self

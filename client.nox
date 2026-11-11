@@ -13,13 +13,13 @@ from auth import BasicAuth, BearerAuth
 import cookies
 from cookies import CookieJar
 import retry
-from retry import RetryPolicy
+from retry import RetryPolicy, parse_retry_after_ms
 import response
 from response import Response
 import request
 from request import Request
 import transport
-from transport import TransportAdapter
+from transport import Transport, TransportAdapter
 import multipart
 from multipart import MultipartEncoder, MultipartFile, file_from_path
 import ssrf
@@ -31,6 +31,9 @@ from errors import RetryExhaustedError, TransportError, UnsupportedFeatureError
 import nox.strings
 import nox.url
 from nox.url import URL
+
+# The Nox runtime connection pool is shared by the whole process.
+CONNECTION_POOL_SCOPE: str = "process"
 
 def is_same_origin(url1: str, url2: str) -> bool:
     u1: URL = nox.url.parse(url1)
@@ -64,7 +67,7 @@ class Client:
     max_redirects: int
     timeout_ms: int
     ssrf_policy: SSRFPolicy | None
-    transport: TransportAdapter
+    transport: Transport
 
     def __init__(
         self: Client,
@@ -76,7 +79,7 @@ class Client:
     ) -> None:
         self.base_url = base_url
         self.default_headers = Headers()
-        self.default_headers.set("User-Agent", "Nova/0.5.0")
+        self.default_headers.set("User-Agent", "Nova/0.6.0")
         self.default_headers.set("Accept", "*/*")
         self.basic_auth = None
         self.bearer_auth = None
@@ -88,12 +91,20 @@ class Client:
         self.ssrf_policy = ssrf_policy
         self.transport = TransportAdapter()
 
+    # SCOPE: the Nox runtime pool is PROCESS-WIDE (nox.http.client_pool). Calling this on any
+    # Client reconfigures the pool for EVERY Client / request in the process; connections are
+    # keyed per origin by the runtime, never shared across different hosts. A per-Client pool
+    # is not possible without runtime support (NOX_LIMITATIONS.md §17).
     def set_connection_pool(self: Client, max_idle: int = 32, idle_timeout_ms: int = 90000) -> Client:
         client_pool(max_idle, idle_timeout_ms)
         return self
 
+    # Idle connections in the PROCESS-WIDE pool (not just this Client's).
     def get_idle_connections(self: Client) -> int:
         return client_idle_connections()
+
+    def connection_pool_scope(self: Client) -> str:
+        return CONNECTION_POOL_SCOPE
 
     def set_ssrf_policy(self: Client, policy: SSRFPolicy) -> Client:
         self.ssrf_policy = policy
@@ -124,6 +135,11 @@ class Client:
     def enable_cookies(self: Client) -> Client:
         if self.cookies is None:
             self.cookies = CookieJar()
+        return self
+
+    # Dependency injection point: replace the nox.http-backed transport (e.g. MockTransport in tests).
+    def set_transport(self: Client, t: Transport) -> Client:
+        self.transport = t
         return self
 
     def set_retry_policy(self: Client, policy: RetryPolicy) -> Client:
@@ -159,16 +175,13 @@ class Client:
                     if pol is not None:
                         if pol.should_retry_status(current_req.method, attempt, r.status_code):
                             attempt = attempt + 1
-                            delay: int = pol.calculate_delay_ms(attempt)
-                            # Respect Retry-After header if present (AGENTS.md §13)
+                            delay: int = pol.next_delay_ms(attempt)
+                            # Respect Retry-After header if present (AGENTS.md §13): delta-seconds or HTTP-date
                             retry_after_str: str = r.headers.get("Retry-After", "")
                             if len(retry_after_str) > 0:
-                                try:
-                                    secs: int = int(nox.strings.trim(retry_after_str))
-                                    if secs > 0:
-                                        delay = secs * 1000
-                                except ValueError as ve:
-                                    pass
+                                ra_ms: int = parse_retry_after_ms(retry_after_str, nox.time.now_ms() // 1000)
+                                if ra_ms > 0:
+                                    delay = ra_ms
                             # Cap delay to max_backoff_ms to prevent sleep DoS
                             if delay > pol.max_backoff_ms:
                                 delay = pol.max_backoff_ms
@@ -180,7 +193,7 @@ class Client:
                     if pol is not None:
                         if pol.should_retry_error(current_req.method, attempt):
                             attempt = attempt + 1
-                            delay: int = pol.calculate_delay_ms(attempt)
+                            delay: int = pol.next_delay_ms(attempt)
                             nox.time.sleep_ms(delay)
                             continue
                     raise te
@@ -208,6 +221,8 @@ class Client:
                     if not same_origin:
                         next_headers.delete("Authorization")
                         next_headers.delete("Proxy-Authorization")
+                        # Manually configured Cookie headers must never cross origins either.
+                        next_headers.delete("Cookie")
 
                     # Handle 303 See Other or 301/302 POST -> GET
                     next_method: str = current_req.method

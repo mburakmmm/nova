@@ -1,0 +1,111 @@
+# tests/unit/redirect_security_test.nox — REAL Client.send() redirect flow over a MockTransport:
+# credential stripping, manual Cookie leak, SSRF on hops, CookieJar re-application.
+
+import nox.test
+import client
+import cookies
+from cookies import CookieJar
+from client import Client
+import response
+from response import Response
+import mock_transport
+from mock_transport import MockTransport
+import request
+from request import Request
+import ssrf
+from ssrf import SSRFPolicy
+import errors
+from errors import SSRFSecurityError
+
+# 1. Cross-origin redirect strips Authorization, Proxy-Authorization AND manual Cookie.
+m: MockTransport = MockTransport()
+m.route("https://api.example.com/start", 302, "", {"Location": "https://attacker.example.net/steal"})
+m.route("https://attacker.example.net/steal", 200, "landed")
+c: Client = Client()
+c.set_transport(m)
+c.set_header("Cookie", "session=secret")
+c.set_header("Proxy-Authorization", "Basic cHJveHk6c2VjcmV0")
+c.set_bearer_auth("tok_123")
+r: Response = c.get("https://api.example.com/start")
+nox.test.assert_eq_int(r.status_code, 200, "redirect followed")
+nox.test.assert_eq_int(m.request_count(), 2, "two hops")
+first: Request = m.requests[0]
+second: Request = m.requests[1]
+nox.test.assert_true(first.headers.has("Cookie"), "first hop carries the manual Cookie")
+nox.test.assert_true(first.headers.has("Authorization"), "first hop carries Authorization")
+nox.test.assert_true(not second.headers.has("Cookie"), "manual Cookie NOT leaked cross-origin")
+nox.test.assert_true(not second.headers.has("Authorization"), "Authorization NOT leaked cross-origin")
+nox.test.assert_true(not second.headers.has("Proxy-Authorization"), "Proxy-Authorization NOT leaked cross-origin")
+
+# 2. Same-origin redirect keeps credentials.
+m2: MockTransport = MockTransport()
+m2.route("https://api.example.com/a", 301, "", {"Location": "/b"})
+m2.route("https://api.example.com/b", 200, "ok")
+c2: Client = Client()
+c2.set_transport(m2)
+c2.set_header("Cookie", "session=secret")
+c2.set_bearer_auth("tok_123")
+c2.get("https://api.example.com/a")
+nox.test.assert_true(m2.requests[1].headers.has("Cookie"), "same-origin keeps Cookie")
+nox.test.assert_true(m2.requests[1].headers.has("Authorization"), "same-origin keeps Authorization")
+
+# 3. Scheme downgrade (https -> http) is cross-origin: credentials stripped.
+m3: MockTransport = MockTransport()
+m3.route("https://api.example.com/a", 302, "", {"Location": "http://api.example.com/b"})
+m3.route("http://api.example.com/b", 200, "ok")
+c3: Client = Client()
+c3.set_transport(m3)
+c3.set_header("Cookie", "session=secret")
+c3.set_bearer_auth("tok_123")
+c3.get("https://api.example.com/a")
+nox.test.assert_true(not m3.requests[1].headers.has("Cookie"), "https->http downgrade strips Cookie")
+nox.test.assert_true(not m3.requests[1].headers.has("Authorization"), "https->http downgrade strips Authorization")
+
+# 4. CookieJar: jar cookies for the NEW host are applied, old host's are not.
+m4: MockTransport = MockTransport()
+m4.route("https://a.example.com/go", 302, "", {"Location": "https://b.example.org/in"})
+m4.route("https://b.example.org/in", 200, "ok")
+c4: Client = Client()
+c4.set_transport(m4)
+c4.enable_cookies()
+jar4: CookieJar | None = c4.cookies
+if jar4 is not None:
+    jar4.set("for_a", "1", "a.example.com", "/", False, False, True)
+    jar4.set("for_b", "2", "b.example.org", "/", False, False, True)
+c4.get("https://a.example.com/go")
+nox.test.assert_eq_str(m4.requests[0].headers.get("Cookie"), "for_a=1", "hop 1 gets host-a cookie only")
+nox.test.assert_eq_str(m4.requests[1].headers.get("Cookie"), "for_b=2", "hop 2 gets host-b cookie only")
+
+# 5. SSRF policy is enforced on redirect hops (open-redirect to metadata blocked).
+m5: MockTransport = MockTransport()
+m5.route("https://api.example.com/x", 302, "", {"Location": "http://169.254.169.254/latest/meta-data"})
+c5: Client = Client()
+c5.set_transport(m5)
+c5.set_ssrf_policy(SSRFPolicy())
+blocked: bool = False
+try:
+    c5.get("https://api.example.com/x")
+except SSRFSecurityError as se:
+    blocked = True
+nox.test.assert_true(blocked, "redirect to metadata IP blocked by SSRF policy")
+nox.test.assert_eq_int(m5.request_count(), 1, "second hop never sent")
+
+# 6. Redirect to hostname resolving to private IP blocked via resolver.
+from_res: ssrf.StaticResolver = ssrf.StaticResolver()
+from_res.add("api.example.com", ["93.184.216.34"])
+from_res.add("sneaky.example.net", ["10.0.0.7"])
+m6: MockTransport = MockTransport()
+m6.route("https://api.example.com/x", 302, "", {"Location": "https://sneaky.example.net/in"})
+c6: Client = Client()
+c6.set_transport(m6)
+pol6: SSRFPolicy = SSRFPolicy()
+pol6.set_resolver(from_res)
+c6.set_ssrf_policy(pol6)
+blocked6: bool = False
+try:
+    c6.get("https://api.example.com/x")
+except SSRFSecurityError as se:
+    blocked6 = True
+nox.test.assert_true(blocked6, "redirect to DNS-private hostname blocked")
+
+print("redirect_security_test passed")

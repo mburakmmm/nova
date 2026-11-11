@@ -1,2 +1,2 @@
 import headers
-from headers import Headers, headers_from_dict
+from headers import Headers, headers_from_dict, response_headers_from_dict

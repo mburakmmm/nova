@@ -2,7 +2,7 @@
 
 [![Nox Version](https://img.shields.io/badge/noxc-2.1.52-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-24%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-31%20passed-brightgreen.svg)]()
 
 > A pleasant, safe, predictable, production-oriented HTTP client for the **Nox programming language**, inspired by Python Requests and HTTPX.
 
@@ -113,6 +113,39 @@ resp: Response = nova.get("https://httpbin.org/json")
 if resp.is_success():
     data: JsonValue = resp.json()
     print("Parsed JSON keys:", nox.json.object_len(data))
+```
+
+### SSRF: strict mode and DNS validation
+
+```nox
+import nova
+from nova import Client, SSRFPolicy, StaticResolver
+
+pol: SSRFPolicy = SSRFPolicy()
+pol.set_strict_hostnames(True)       # strongest: only IP literals + allow-listed hosts
+pol.allow_host("api.partner.com")
+
+# Or validate resolved IPs with your own HostResolver subclass (fail-closed):
+# pol.set_resolver(MyResolver())
+cli: Client = Client()
+cli.set_ssrf_policy(pol)
+```
+
+> Nox has no DNS API / connect-to-validated-IP yet, so a DNS-rebinding window remains when using a resolver. See `docs/security.md` and `NOX_LIMITATIONS.md` §14.
+
+### Lazy Line Streaming
+
+```nox
+from nova import Client, StreamResponse, LineHandler
+
+class Printer(LineHandler):
+    def on_line(self: Printer, line: str) -> bool:
+        print(line)
+        return True
+
+cli: Client = Client("https://httpbin.org")
+with cli.stream("GET", "/stream/20") as st:
+    st.for_each_line(Printer())      # bounded memory, unlike iter_lines()
 ```
 
 ### Streaming Response & Context Manager
@@ -374,9 +407,14 @@ except NovaError as ne:
 | Binary Body Access | ✅ Supported | Native `Response.bytes() -> Buffer` via `nox.bytes` |
 | Streaming Response Reader | ✅ Supported | Native zero-copy socket streaming, `read_chunk()`, `with` manager |
 | Large File Disk Transfer | ✅ Supported | Direct disk streaming via `nova.transfer` (`download_file` / `upload_file`) |
-| Connection Pooling | ✅ Supported | Reusable TCP/TLS pool via `client.set_connection_pool()` |
+| Connection Pooling | ✅ Supported | Reusable TCP/TLS pool via `client.set_connection_pool()` (**process-wide** scope) |
 | HTTP / HTTPS Proxy | ✅ Supported | Transparent `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` with `CONNECT` tunnel |
-| SSRF Protection Shield | ✅ Supported | Private IP, link-local, cloud metadata & IPv6 blocklist (`SSRFPolicy`) |
+| SSRF Protection Shield | ⚠️ Partial | Real IPv4/IPv6 parser, resolver validation, strict-hostname mode. DNS-rebinding TOCTOU needs Nox runtime support — use `set_strict_hostnames(True)` for untrusted URLs |
+| Cookie Expiry / Public Suffix | ✅ Supported | `Expires`/`Max-Age`, curated PSL subset (not the full list) |
+| Multiple `Set-Cookie` | ⚠️ Partial | Nova supports it; current Nox runtime keeps only the last header |
+| Lazy Streaming | ✅ Supported | `read_line`, `for_each_line`, `for_each_chunk` (`iter_*` buffer) |
+| Retry jitter / HTTP-date `Retry-After` | ✅ Supported | Opt-in jitter |
+| Transport Injection | ✅ Supported | `Client.set_transport()`, `MockTransport` |
 | Async Concurrency | ✅ Supported | Fiber tasks via Nox runtime (`spawn` / `Task[T]`) |
 
 ---
@@ -391,7 +429,7 @@ noxc test
 
 Output:
 ```text
-24 passed, 0 failed (24 total)
+31 passed, 0 failed (31 total)
 ```
 
 Run demonstration:

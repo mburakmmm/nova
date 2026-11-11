@@ -5,6 +5,26 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-11
+
+### Security & Standards Hardening (external audit of v0.5.0)
+- **CI fixed (P0)**: `tests/fixtures/` was an empty directory not tracked by git → `file_transfer_integration_test` failed with `FsError` on Linux CI. Added `tests/fixtures/.gitkeep`.
+- **SSRF (P0/P1)** — `ssrf.nox` rewritten:
+  - Real IPv4/IPv6 parser (`parse_ip`, `classify_ip`): inet_aton forms (`2130706433`, `0x7f000001`, `0177.0.0.1`, `127.1`), compressed/expanded IPv6, zone IDs, mapped/compatible/translated/NAT64/6to4 embedded IPv4, ULA, site-local, multicast, documentation, Teredo. String-prefix checks removed (no more `fc.example.com` false positives).
+  - **DNS-resolution validation**: `HostResolver` / `StaticResolver`, `SSRFPolicy.set_resolver()`, `validate_resolved()` — every resolved IP is validated, fail-closed on empty/invalid answers.
+  - `SSRFPolicy.set_strict_hostnames()`: only IP literals and allow-listed hostnames pass.
+  - Trailing-dot `localhost.` bypass closed.
+  - Remaining DNS-rebinding TOCTOU window documented (needs Nox runtime support, `NOX_LIMITATIONS.md` §14).
+- **Redirect (P1)**: `Cookie` header (including manually configured) is now stripped on every cross-origin hop; jar cookies are re-applied for the new URL only. Verified by a real `Client.send()` flow and by a mutation check.
+- **CookieJar (P1)**: `Expires` + `Max-Age` (precedence, deletion, expired never sent, `purge_expired`), embedded curated Public Suffix subset + `add_public_suffix()`, RFC 6265 default-path, `SameSite` recorded, multiple `Set-Cookie` values (`\n`-joined) processed independently.
+- **Headers**: `set_multi()`, `get_all()`, `response_headers_from_dict()` (request-side CRLF defense unchanged).
+- **Streaming (P1)**: lazy `read_line()`, `for_each_line(LineHandler)`, `for_each_chunk(ChunkHandler)` with `max_line_bytes`; `iter_lines`/`iter_bytes` documented as buffering.
+- **Retry (P2)**: opt-in `full`/`equal` jitter (deterministic sample for tests), `Retry-After` HTTP-date (new `httpdate.nox`), overflow-safe backoff, one-year Retry-After ceiling.
+- **Architecture (P2)**: `Transport` interface, `Client.set_transport()`, in-memory `MockTransport` → network-free end-to-end tests.
+- **Pool (P2)**: process-wide scope documented and exposed (`Client.connection_pool_scope()`).
+- New Nox limitations recorded: §14 DNS API / IP pinning, §15 lazy iterators, §16 duplicate response headers, §17 per-client pool, §18 notes.
+- **Tests**: 10 new test files (httpdate, ssrf_advanced, cookies_advanced, retry_advanced, redirect_security, stream_lazy, transport_injection …).
+
 ## [0.5.0] - 2026-11-11
 
 ### Added — Phase 5 Native Socket Streaming, Connection Pooling & File Transfer

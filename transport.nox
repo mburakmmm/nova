@@ -10,13 +10,22 @@ from response import Response
 import stream
 from stream import StreamResponse
 import headers
-from headers import Headers, headers_from_dict
+from headers import Headers, headers_from_dict, response_headers_from_dict
 import errors
 from errors import TransportError, TimeoutError, UnsupportedFeatureError
 import url
 from url import sanitize_url
 
-class TransportAdapter:
+# Abstract transport. Client depends on this interface (dependency injection), so tests
+# and alternative transports can replace the nox.http-backed TransportAdapter.
+class Transport:
+    def execute(self: Transport, req: Request) -> Response:
+        raise UnsupportedFeatureError(req.method, "Transport.execute is not implemented")
+
+    def stream(self: Transport, req: Request) -> StreamResponse:
+        raise UnsupportedFeatureError(req.method, "Transport.stream is not implemented")
+
+class TransportAdapter(Transport):
     def __init__(self: TransportAdapter) -> None:
         pass
 
@@ -30,7 +39,7 @@ class TransportAdapter:
             try:
                 res: HttpResponse = nox.http.request(method, target_url, req.body, raw_headers, req.timeout_ms)
                 elapsed: int = nox.time.now_ms() - start_ms
-                resp_headers: Headers = headers_from_dict(res.headers)
+                resp_headers: Headers = response_headers_from_dict(res.headers)
                 return Response(res.status, res.body, resp_headers, target_url, method, elapsed)
             except HttpTimeoutError as te:
                 raise TimeoutError("Request timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te))
@@ -50,7 +59,7 @@ class TransportAdapter:
                 if t_ms < 0:
                     t_ms = 0
                 s: HttpStream = nox.http.stream(method, target_url, raw_headers, req.body, t_ms)
-                resp_headers: Headers = headers_from_dict(s.headers)
+                resp_headers: Headers = response_headers_from_dict(s.headers)
                 return StreamResponse(s.status, resp_headers, target_url, method, "", s)
             except HttpTimeoutError as te:
                 raise TimeoutError("Stream request timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te))

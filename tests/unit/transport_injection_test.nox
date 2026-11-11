@@ -1,0 +1,57 @@
+# tests/unit/transport_injection_test.nox — Client works against any Transport (dependency injection).
+
+import nox.test
+import client
+from client import Client
+import response
+from response import Response
+import transport
+from transport import Transport, TransportAdapter
+import mock_transport
+from mock_transport import MockTransport
+import errors
+from errors import TransportError
+
+m: MockTransport = MockTransport()
+m.route("https://api.example.com/json", 200, "{\"a\":1}", {"Content-Type": "application/json"})
+m.add_response(404, "nope")
+c: Client = Client("https://api.example.com")
+c.set_transport(m)
+c.set_header("X-Trace", "abc")
+
+r: Response = c.get("/json")
+nox.test.assert_eq_int(r.status_code, 200, "route served")
+nox.test.assert_eq_str(r.text(), "{\"a\":1}", "body served")
+nox.test.assert_eq_str(m.last_request().headers.get("X-Trace"), "abc", "default headers reach transport")
+nox.test.assert_eq_str(m.last_request().url, "https://api.example.com/json", "base_url resolved")
+nox.test.assert_eq_str(m.last_request().method, "GET", "method recorded")
+
+r2: Response = c.post("/other", "payload")
+nox.test.assert_eq_int(r2.status_code, 404, "queue served")
+nox.test.assert_eq_str(m.last_request().body, "payload", "body recorded")
+
+# no response configured -> explicit TransportError, never a fake success
+unconfigured: bool = False
+try:
+    c.get("/missing")
+except TransportError as te:
+    unconfigured = True
+nox.test.assert_true(unconfigured, "unconfigured mock fails loudly")
+
+# default transport is the real adapter; scope is documented honestly
+c2: Client = Client()
+nox.test.assert_eq_str(c2.connection_pool_scope(), "process", "pool scope is process-wide")
+
+# raise_for_status through injected transport
+m3: MockTransport = MockTransport()
+m3.add_response(500, "err")
+c3: Client = Client("", True)
+c3.set_transport(m3)
+raised: bool = False
+try:
+    c3.get("https://x.test/")
+except Exception as e:
+    raised = True
+nox.test.assert_true(raised, "raise_for_status honoured with injected transport")
+
+print("transport_injection_test passed")

@@ -1,0 +1,105 @@
+# tests/unit/ssrf_advanced_test.nox — IP parser, alternate notations, DNS-resolution validation.
+
+import nox.test
+import ssrf
+from ssrf import SSRFPolicy, StaticResolver, IPAddress, parse_ip, classify_ip
+import errors
+from errors import SSRFSecurityError
+
+def blocked(p: SSRFPolicy, u: str) -> bool:
+    try:
+        p.validate_target(u)
+    except SSRFSecurityError as e:
+        return True
+    return False
+
+policy: SSRFPolicy = SSRFPolicy()
+
+# --- parser ---
+nox.test.assert_true(parse_ip("127.0.0.1").is_valid, "dotted quad parses")
+nox.test.assert_true(not parse_ip("256.1.1.1").is_valid, "octet > 255 invalid")
+nox.test.assert_true(not parse_ip("1.2.3.4.5").is_valid, "5 parts invalid")
+nox.test.assert_true(not parse_ip("not-an-ip").is_valid, "hostname invalid")
+nox.test.assert_true(parse_ip("::1").is_valid, "::1 parses")
+nox.test.assert_true(not parse_ip("1::2::3").is_valid, "double :: invalid")
+nox.test.assert_true(not parse_ip("12345::1").is_valid, "group too long invalid")
+nox.test.assert_eq_str(classify_ip(parse_ip("8.8.8.8")), "", "public v4 unclassified")
+nox.test.assert_eq_str(classify_ip(parse_ip("2606:4700:4700::1111")), "", "public v6 unclassified")
+
+# --- alternate IPv4 notations (all are 127.0.0.1 / 169.254.169.254 for getaddrinfo) ---
+nox.test.assert_true(blocked(policy, "http://2130706433/"), "decimal integer 127.0.0.1 blocked")
+nox.test.assert_true(blocked(policy, "http://0x7f000001/"), "hex integer 127.0.0.1 blocked")
+nox.test.assert_true(blocked(policy, "http://0x7f.0.0.1/"), "hex octet blocked")
+nox.test.assert_true(blocked(policy, "http://0177.0.0.1/"), "octal octet blocked")
+nox.test.assert_true(blocked(policy, "http://127.1/"), "short form 127.1 blocked")
+nox.test.assert_true(blocked(policy, "http://2852039166/"), "decimal 169.254.169.254 blocked")
+nox.test.assert_true(blocked(policy, "http://localhost./"), "trailing-dot localhost blocked")
+
+# --- IPv6 forms ---
+nox.test.assert_true(blocked(policy, "http://[0:0:0:0:0:0:0:1]/"), "expanded ::1 blocked")
+nox.test.assert_true(blocked(policy, "http://[::]/"), "unspecified blocked")
+nox.test.assert_true(blocked(policy, "http://[::ffff:7f00:1]/"), "hex mapped 127.0.0.1 blocked")
+nox.test.assert_true(blocked(policy, "http://[::ffff:127.0.0.1]/"), "dotted mapped blocked")
+nox.test.assert_true(blocked(policy, "http://[0:0:0:0:0:ffff:a00:5]/"), "expanded mapped 10.0.0.5 blocked")
+nox.test.assert_true(blocked(policy, "http://[::ffff:a9fe:a9fe]/"), "hex mapped metadata blocked")
+nox.test.assert_true(blocked(policy, "http://[64:ff9b::7f00:1]/"), "NAT64 loopback blocked")
+nox.test.assert_true(blocked(policy, "http://[2002:7f00:1::1]/"), "6to4 loopback blocked")
+nox.test.assert_true(blocked(policy, "http://[::127.0.0.1]/"), "IPv4-compatible loopback blocked")
+nox.test.assert_true(blocked(policy, "http://[fe80::1%25eth0]/"), "link-local with zone blocked")
+nox.test.assert_true(blocked(policy, "http://[fd12:3456::1]/"), "ULA blocked")
+nox.test.assert_true(blocked(policy, "http://[ff02::1]/"), "multicast blocked")
+nox.test.assert_true(blocked(policy, "http://[2001:db8::1]/"), "documentation range blocked")
+
+# Hostname that merely starts with 'fc'/'fe8' must NOT be treated as IPv6.
+nox.test.assert_true(not blocked(policy, "https://fc.example.com/"), "fc.example.com not mistaken for ULA")
+nox.test.assert_true(not blocked(policy, "https://fe80.example.com/"), "fe80.example.com not mistaken for link-local")
+nox.test.assert_true(not blocked(policy, "http://[2606:4700:4700::1111]/"), "public v6 allowed")
+nox.test.assert_true(not blocked(policy, "http://100.63.255.255/"), "just below CGNAT allowed")
+
+# --- DNS-resolution validation ---
+res: StaticResolver = StaticResolver()
+res.add("internal.example.com", ["10.0.0.5"])
+res.add("rebind.example.com", ["203.0.113.250", "127.0.0.1"])
+res.add("public.example.com", ["93.184.216.34"])
+res.add("v6internal.example.com", ["fd00::5"])
+res.add("badip.example.com", ["not-an-ip"])
+
+dp: SSRFPolicy = SSRFPolicy()
+dp.set_resolver(res)
+nox.test.assert_true(blocked(dp, "https://internal.example.com/"), "hostname resolving to RFC1918 blocked")
+nox.test.assert_true(blocked(dp, "https://rebind.example.com/"), "any resolved IP private -> blocked")
+nox.test.assert_true(blocked(dp, "https://v6internal.example.com/"), "hostname resolving to ULA blocked")
+nox.test.assert_true(blocked(dp, "https://badip.example.com/"), "invalid resolver output blocked (fail closed)")
+nox.test.assert_true(blocked(dp, "https://unknown.example.com/"), "unresolvable hostname blocked (fail closed)")
+nox.test.assert_true(not blocked(dp, "https://public.example.com/"), "hostname resolving to public IP allowed")
+
+# allowlisted host bypasses resolution checks explicitly
+dp2: SSRFPolicy = SSRFPolicy()
+dp2.set_resolver(res)
+dp2.allow_host("internal.example.com")
+nox.test.assert_true(not blocked(dp2, "https://internal.example.com/"), "explicit allowlist overrides resolver")
+
+# allow_private lets resolved private IP through
+dp3: SSRFPolicy = SSRFPolicy(True)
+dp3.set_resolver(res)
+nox.test.assert_true(not blocked(dp3, "https://internal.example.com/"), "allow_private permits resolved private")
+nox.test.assert_true(blocked(dp3, "https://rebind.example.com/"), "allow_private still blocks loopback")
+
+# direct validate_resolved API
+direct_blocked: bool = False
+try:
+    policy.validate_resolved("https://x.test/", "x.test", ["8.8.8.8", "192.168.1.1"])
+except SSRFSecurityError as e:
+    direct_blocked = True
+nox.test.assert_true(direct_blocked, "validate_resolved rejects mixed list")
+
+# --- strict hostname mode ---
+sp: SSRFPolicy = SSRFPolicy()
+sp.set_strict_hostnames(True)
+sp.allow_host("api.partner.com")
+nox.test.assert_true(blocked(sp, "https://evil.example.com/"), "strict mode rejects unlisted hostname")
+nox.test.assert_true(not blocked(sp, "https://api.partner.com/"), "strict mode permits allowlisted hostname")
+nox.test.assert_true(not blocked(sp, "https://8.8.8.8/"), "strict mode permits public IP literal")
+nox.test.assert_true(blocked(sp, "https://10.0.0.1/"), "strict mode still blocks private literal")
+
+print("ssrf_advanced_test passed")

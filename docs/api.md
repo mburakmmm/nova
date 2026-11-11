@@ -175,3 +175,30 @@ from nova import RetryPolicy
 
 - `calculate_delay_ms(attempt: int) -> int`: Returns bounded exponential backoff duration.
 - `is_status_retryable(status_code: int) -> bool`: Identifies transient status codes (408, 429, 500, 502, 503, 504).
+
+---
+
+## v0.6.0 additions
+
+### `SSRFPolicy`
+- `set_resolver(r: HostResolver) -> SSRFPolicy` — validate every resolved IP (fail-closed).
+- `set_strict_hostnames(enabled: bool = True) -> SSRFPolicy` — only IP literals and allow-listed hostnames.
+- `validate_resolved(url: str, host: str, ips: list[str]) -> None`
+- `HostResolver.resolve(host: str) -> list[str]` (subclass), `StaticResolver.add(host, ips)`.
+- `parse_ip(host: str) -> IPAddress`, `classify_ip(ip) -> str` (`""`, `loopback`, `link_local`, `private`, `reserved`).
+
+### `StreamResponse` (lazy)
+- `read_line() -> str | None`, `for_each_line(handler: LineHandler) -> int`, `for_each_chunk(handler: ChunkHandler, chunk_size: int = 4096) -> int`, `max_line_bytes` (default 1 MiB).
+
+### `CookieJar`
+- `add_public_suffix(suffix)`, `purge_expired() -> int`, `now_override_s` (deterministic clock); `Cookie.expires`, `Cookie.same_site`.
+
+### `Headers`
+- `set_multi(name, values)`, `get_all(name) -> list[str]`; `response_headers_from_dict(d)`.
+
+### `RetryPolicy`
+- `set_jitter(mode: str)` (`"none"`, `"full"`, `"equal"`), `next_delay_ms(attempt)`, `jittered_delay_ms(attempt, sample_permille)`; `parse_retry_after_ms(value, now_s)`.
+
+### Transport injection
+- `Transport` (base), `TransportAdapter` (nox.http), `MockTransport` (`add_response`, `add_error`, `route`, `requests`), `Client.set_transport(t)`.
+- `Client.connection_pool_scope() -> str` — always `"process"`.

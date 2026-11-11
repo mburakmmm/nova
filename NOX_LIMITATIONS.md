@@ -131,6 +131,48 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
 
 ---
 
+## 14. DNS Çözümleme API'si ve Doğrulanmış IP'ye Bağlanma (SSRF / DNS Rebinding)
+- **Durum:** ⚠️ **AÇIK — Nox çalışma zamanı özelliği gerekli (P0 güvenlik)**
+- **Detay:** Nox stdlib'de bir DNS çözümleme fonksiyonu (`nox.net.resolve` benzeri) yoktur ve `nox.http` bağlanırken hostname'i kendisi tekrar çözer. Bu yüzden Nova, çözümlenmiş IP'yi doğrulasa bile bağlantı **o IP'ye** yapılmaz → DNS rebinding (TOCTOU) penceresi açık kalır.
+- **Önerilen Nox değişikliği:**
+  1. `nox.net.resolve(host: str) -> list[str]` (A/AAAA).
+  2. `nox.http` isteklerine `connect_ip: str` (veya bir `pre_connect` doğrulama kancası): doğrulanmış IP'ye bağlan, TLS SNI + sertifika/hostname doğrulamasını **orijinal hostname** üzerinden yap.
+  3. Ortak `nox.net.ip` (IPv4/IPv6 ayrıştırma + sınıflandırma): Nova'nın `ssrf.nox` parser'ı bunun için referans olabilir; Cipher / Sentinel gibi kütüphaneler tekrar yazmak zorunda kalmaz.
+- **Nova'daki karşılığı (v0.6.0):** `HostResolver` arayüzü + `SSRFPolicy.set_resolver()` (tüm IP'ler doğrulanır, fail-closed) ve `set_strict_hostnames(True)` (en güçlü mevcut mod).
+
+---
+
+## 15. Tembel (Lazy) İteratör / Generator Desteği
+- **Durum:** ⚠️ **AÇIK — dil özelliği**
+- **Detay:** Nox'ta `for x in obj.iter_lines():` ile tüketilebilen tembel iteratör/generator protokolü yoktur; metotlar `list[...]` döndürmek zorundadır (tüm veri belleğe alınır).
+- **Önerilen Nox değişikliği:** `__iter__`/`__next__` protokolü veya `yield`.
+- **Nova'daki karşılığı (v0.6.0):** `StreamResponse.read_line()` (pull) ve callback sınıfları `LineHandler` / `ChunkHandler` ile `for_each_line` / `for_each_chunk` (sınırlı bellek).
+
+---
+
+## 16. Yinelenen Yanıt Başlıkları (Birden Çok `Set-Cookie`)
+- **Durum:** ⚠️ **AÇIK — runtime hatası/eksiği**
+- **Detay:** Canlı doğrulandı: `httpbin.org/cookies/set?a=1&b=2` iki `Set-Cookie` döndürür, ancak `nox.http` istemcisinin `HttpResponse.headers: dict[str, str]` alanında yalnızca **sonuncusu** (`b=2`) kalır; `a=1` kaybolur. (Sunucu tarafı için `nox.http.multi` `\n` ile birleştirir; istemci tarafı simetrik değildir.)
+- **Önerilen Nox değişikliği:** İstemci yanıtında yinelenen başlıkları `nox.http.multi` ile aynı `\n` kuralıyla birleştirmek (veya `HttpResponse.header_list: list[tuple[str,str]]`).
+- **Nova'daki karşılığı (v0.6.0):** `Headers.set_multi/get_all`, `response_headers_from_dict` ve `CookieJar` çoklu `Set-Cookie` değerlerini `\n` ile destekler; runtime düzelince ek değişiklik gerekmez.
+
+---
+
+## 17. Client'a Özel (Per-Client) Bağlantı Havuzu
+- **Durum:** ⚠️ **AÇIK — runtime tasarımı**
+- **Detay:** `nox.http.client_pool(max_idle, idle_timeout_ms)` **süreç geneli**dir. Bir `Client` üzerindeki `set_connection_pool()` bütün süreci etkiler (bağlantılar origin başına ayrı tutulur).
+- **Önerilen Nox değişikliği:** `nox.http.Pool` nesnesi (`pool.request(...)` / `request(..., pool=p)`).
+- **Nova'daki karşılığı (v0.6.0):** API dokümantasyonunda kapsam açıkça "process"; `Client.connection_pool_scope()`.
+
+---
+
+## 18. Modül Düzeyinde Değiştirilebilir Durum ve `while True` Dönüş Analizi
+- **Durum:** ℹ️ **BİLGİ**
+- `global` ile modül değişkeni atanamadığından (Public Suffix listesi gibi) çalışma-zamanı genişletmeleri nesne alanlarında tutulur (`CookieJar.add_public_suffix`).
+- `while True:` içinde `return` olsa bile fonksiyon sonuna `return` gerekir (`MissingReturn`).
+
+---
+
 ## 📊 Çözüm Matrisi Özeti
 
 | Kısıtlama / Özellik | İlgili Nox Sürümü | Durum | Nova'daki Karşılığı |
@@ -148,3 +190,7 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
 | Proxy Tünelleme | `v2.0.129` | ✅ ÇÖZÜLDÜ | `HTTP_PROXY`, `HTTPS_PROXY` şeffaf tünelleme |
 | Büyük Dosya Transferi | `v2.0.69` | ✅ ÇÖZÜLDÜ | `nova.transfer` (`download_file`/`upload_file`) |
 | FFI Argümanında Heap Geçicisi | — | ⚠️ AÇIK (Workaround var) | Yerel değişkene atama kuralı |
+| DNS çözümleme + IP'ye bağlanma | — | ⚠️ AÇIK (P0) | `HostResolver`, `strict_hostnames` |
+| Tembel iteratör | — | ⚠️ AÇIK | `read_line`, `for_each_line` |
+| Yinelenen yanıt başlıkları | — | ⚠️ AÇIK | `Headers.set_multi`, `\n` kuralı |
+| Client'a özel havuz | — | ⚠️ AÇIK | Kapsam belgelendi (`process`) |
