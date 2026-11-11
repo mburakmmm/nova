@@ -1,0 +1,38 @@
+# tests/integration/file_transfer_integration_test.nox — Integration test for download_file and upload_file.
+
+import nox.test
+import nox.fs
+from nox.fs import FileReader, FileWriter
+import client
+from client import Client
+import response
+from response import Response
+import transfer
+from transfer import download_file, upload_file
+
+cli: Client = Client("https://httpbin.org")
+
+# 1. Download binary file to disk
+dl_target: str = "tests/fixtures/test_download.bin"
+status: int = download_file(cli, "/bytes/256", dl_target)
+nox.test.assert_eq_int(status, 200, "download status code 200")
+
+r: FileReader = nox.fs.open_read(dl_target)
+dl_size: int = r.size()
+r.close()
+nox.fs.remove_file(dl_target)
+nox.test.assert_eq_int(dl_size, 256, "downloaded exactly 256 bytes")
+
+# 2. Upload file from disk
+ul_source: str = "tests/fixtures/test_upload.txt"
+w: FileWriter = nox.fs.open_write(ul_source)
+w.write("Streaming payload from disk file for Nova upload test")
+w.close()
+
+ul_resp: Response = upload_file(cli, "/post", ul_source, "POST", None, {"Content-Type": "text/plain"})
+nox.fs.remove_file(ul_source)
+
+nox.test.assert_eq_int(ul_resp.status_code, 200, "upload status code 200")
+nox.test.assert_true("Streaming payload from disk file" in ul_resp.text(), "reflected upload content in response")
+
+print("file_transfer_integration_test passed")

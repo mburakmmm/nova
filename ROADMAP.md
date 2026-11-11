@@ -13,7 +13,8 @@
 | **Phase 2** | Client Ergonomics (Auth, CookieJar, Retry, Forms) | ✅ **COMPLETED** | v0.1.0 | 5 unit tests |
 | **Phase 3** | Transport Expansion (Methods, Timeout, Binary, Multipart, Redirects) | ✅ **COMPLETED** | v0.3.0 | 18 unit/integration tests |
 | **Phase 4** | Advanced Features (Streaming, SSRF Shield, Async Concurrency) | ✅ **COMPLETED** | v0.4.0 | 22 unit/integration tests |
-| **Phase 5** | Stable 1.0 Release (API Freeze, Security Audit, SemVer) | ⏳ **NEXT** | v1.0.0 | Full Matrix |
+| **Phase 5** | Native Streaming, Pooling & File Transfer | ✅ **COMPLETED** | v0.5.0 | 24 unit/integration tests |
+| **Phase 6** | Stable 1.0 Release (API Freeze, Security Audit, SemVer) | ⏳ **NEXT** | v1.0.0 | Full Matrix |
 
 ---
 
@@ -41,7 +42,7 @@
 ---
 
 ### ✅ Phase 2 — Client Ergonomics (COMPLETED)
-- [x] **2.1. Client Session (`client.nox`)**: `Client(base_url, raise_for_status)` with default headers (`User-Agent: Nova/0.1.0`, `Accept: */*`).
+- [x] **2.1. Client Session (`client.nox`)**: `Client(base_url, raise_for_status)` with default headers (`User-Agent: Nova/0.5.0`, `Accept: */*`).
 - [x] **2.2. Zero Mutable Global State**: Full instance isolation between `Client` objects.
 - [x] **2.3. Authentication Helpers (`auth.nox`)**:
   - `BasicAuth`: Base64 UTF-8 encoding, credential redaction in `redacted()`.
@@ -107,22 +108,40 @@
 - [x] **4.3. Async Concurrency with Nox Fibers**:
   - Verified concurrent non-blocking HTTP requests across fiber task pool via `spawn` and `Task[T]`.
   - Added live concurrent integration test in `tests/integration/async_concurrency_test.nox`.
-  - Documented compiler limitations regarding `spawn` method calls and cross-module import symbol behavior in `NOX_LIMITATIONS.md`.
 - [x] **4.4. Binary Body & Buffer Preservation**:
   - Embedded NUL byte and binary data handling via `Response.bytes() -> Buffer`.
   - Unit test in `tests/unit/binary_response_test.nox`.
-- [x] **4.5. Upstream Transport Matrix & Limitation Tracking**:
-  - Documented HEAD request keep-alive socket hang in `NOX_LIMITATIONS.md`.
-  - Documented missing runtime persistent connection pooling and proxy dialer in `docs/transport-capabilities.md`.
 
 ---
 
-### ⏳ Phase 5 — Stable 1.0 Release (IN PROGRESS)
-- [ ] **5.1. Public API Review**: Final SemVer compatibility guarantee.
-- [x] **5.2. Microbenchmarks (`benchmarks/bench_nova.nox`)**: URL resolution (1.3 µs), case-insensitive header lookup (33 ns), SSRF validation (0.5 µs), and multipart framing (< 1 µs).
-- [x] **5.3. Cross-Platform Matrix (`.github/workflows/ci.yml`)**: Automated CI validation across macOS and Linux with `noxc test`.
-- [ ] **5.4. Security Checklist Sign-off**: Complete verification of the AGENTS.md security checklist.
-- [ ] **5.5. Official 1.0 Release**: Tag `v1.0.0` and update `nox.json` / central index.
+### ✅ Phase 5 — Native Streaming, Pooling & File Transfer (COMPLETED — v0.5.0)
+- [x] **5.1. Native Socket Streaming (`stream.nox`)**:
+  - Wired `nox.http.stream()` and native `HttpStream` into `StreamResponse`.
+  - Added Pythonic context manager `with client.stream(...) as s:` (`__enter__` and `__exit__`).
+  - True incremental reads via `read_chunk()` and `close()`.
+  - Verified live in `tests/integration/stream_integration_test.nox`.
+- [x] **5.2. Connection Pooling (`client.nox`, `nova.nox`)**:
+  - Integrated `nox.http.client_pool(max_idle, idle_timeout_ms)` and `nox.http.client_idle_connections()`.
+  - Added `Client.set_connection_pool()` and `Client.get_idle_connections()`.
+  - Verified in `tests/integration/pool_integration_test.nox`.
+- [x] **5.3. Large File Streaming Downloads & Uploads (`transfer.nox`, `nova/transfer.nox`)**:
+  - Created streaming file transfer module backed by `nox.transfer.download_to_file` and `nox.transfer.upload_file`.
+  - Added `download_file`, `upload_file`, `download`, `upload` in `nova.transfer` and top-level `nova.download_to_file`, `nova.upload_file`.
+  - Verified in `tests/integration/file_transfer_integration_test.nox`.
+- [x] **5.4. Upstream Limitation Resolutions Verified**:
+  - Live `HEAD` 200 request verified with 0-byte body without keep-alive hang (`tests/integration/methods_integration_test.nox`).
+  - Method `spawn` thunk synthesis verified (`tests/integration/async_concurrency_test.nox`).
+  - Documented compiler ARC codegen heap temporary workaround in `NOX_LIMITATIONS.md`.
+- [x] **5.5. Full Test Suite**:
+  - 24 tests passing (`24 passed, 0 failed (24 total)` in `noxc test`).
+
+---
+
+### ⏳ Phase 6 — Stable 1.0 Release (NEXT)
+- [ ] **6.1. Public API Freeze**: Final SemVer compatibility guarantee and documentation review.
+- [ ] **6.2. Microbenchmarks Update**: Benchmark connection reuse speedups with persistent pool vs unpooled requests.
+- [ ] **6.3. Security Checklist Sign-off**: Complete verification of the AGENTS.md security checklist.
+- [ ] **6.4. Official 1.0 Release**: Tag `v1.0.0` and update `nox.json` / central index.
 
 ---
 

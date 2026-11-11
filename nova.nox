@@ -26,6 +26,8 @@ import multipart
 from multipart import MultipartEncoder, MultipartFile, file_from_path
 import client
 from client import Client
+import transfer
+from transfer import download_file, upload_file as transfer_upload_file, download, upload
 
 def request(
     method: str,
@@ -148,3 +150,30 @@ def stream(
 ) -> StreamResponse:
     c: Client = Client()
     return c.stream(method, url_target, body, params, headers_dict, timeout_ms)
+
+def set_connection_pool(max_idle: int = 32, idle_timeout_ms: int = 90000) -> None:
+    c: Client = Client()
+    c.set_connection_pool(max_idle, idle_timeout_ms)
+
+def idle_connections() -> int:
+    c: Client = Client()
+    return c.get_idle_connections()
+
+def download_to_file(
+    url_target: str,
+    target_path: str,
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
+) -> int:
+    return download(url_target, target_path, params, headers_dict, timeout_ms)
+
+def upload_file(
+    url_target: str,
+    source_path: str,
+    method: str = "POST",
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
+) -> Response:
+    return upload(url_target, source_path, method, params, headers_dict, timeout_ms)

@@ -29,4 +29,10 @@ nox.test.assert_true(del_res.is_success(), "DELETE is_success is true")
 opt_res: Response = cli.options("/get")
 nox.test.assert_true(opt_res.is_success(), "OPTIONS is_success is true")
 
+# 5. HEAD request (keep-alive hang resolved in Nox v2.1.2)
+head_res: Response = cli.head("/get")
+nox.test.assert_eq_int(head_res.status_code, 200, "HEAD status is 200")
+nox.test.assert_true(head_res.is_success(), "HEAD is_success is true")
+nox.test.assert_eq_int(len(head_res.body), 0, "HEAD body is empty string")
+
 print("methods_integration_test passed")

@@ -5,6 +5,37 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-11
+
+### Added — Phase 5 Native Socket Streaming, Connection Pooling & File Transfer
+- **Native Zero-Copy Socket Streaming (`stream.nox`)**:
+  - Direct integration with Nox standard library `nox.http.stream()` and `HttpStream`.
+  - True chunked streaming over live socket connections without buffering entire responses into memory.
+  - Implemented Pythonic context manager support: `with client.stream("GET", url) as s:` (`__enter__` and `__exit__`).
+  - `StreamResponse.read_chunk()` and `read_all()` directly consume live socket chunks with fallback to in-memory buffers when testing.
+  - Added socket lifecycle control via `StreamResponse.close()`.
+  - Verified live in `tests/integration/stream_integration_test.nox`.
+- **HTTP Connection Pooling & Keep-Alive (`client.nox`, `nova.nox`)**:
+  - Leverages Nox v2.0.126 / v2.0.128 connection pooling primitives (`nox.http.client_pool`, `nox.http.client_idle_connections`).
+  - Added `Client.set_connection_pool(max_idle, idle_timeout_ms)` and `Client.get_idle_connections()`.
+  - Added top-level convenience functions `nova.set_connection_pool()` and `nova.idle_connections()`.
+  - Dramatically reduces latency across consecutive requests by reusing open TCP/TLS connections.
+  - Verified in `tests/integration/pool_integration_test.nox`.
+- **Large File Streaming Transfer (`transfer.nox`, `nova/transfer.nox`)**:
+  - Added dedicated streaming file transfer module backed by `nox.transfer.download_to_file` and `nox.transfer.upload_file`.
+  - Efficiently downloads directly from socket to filesystem and streams file uploads directly to socket without RAM blowup.
+  - Exposes `download_file(cli, url, target_path, ...)` and `upload_file(cli, url, source_path, method, ...)`.
+  - Top-level shortcuts in `nova.nox`: `nova.download_to_file(...)` and `nova.upload_file(...)`.
+  - Verified in `tests/integration/file_transfer_integration_test.nox`.
+- **Transparent Proxy Support**:
+  - Automatic detection and support for standard proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) with secure `CONNECT` tunneling provided by Nox v2.0.129.
+- **Resolved Upstream Limitations**:
+  - Verified `HEAD` request keep-alive hang resolution (`http_client.zig:909` in Nox v2.1.2) with live `HEAD 200` integration test.
+  - Verified `spawn` class method thunk synthesis (`checker.zig:2912` in Nox v2.1.5) and imported `async def` recognition.
+  - Documented compiler ARC codegen heap temporary workaround in `NOX_LIMITATIONS.md`.
+- **Test Suite Expansion**:
+  - 24 tests passing (`24 passed, 0 failed (24 total)` in `noxc test`).
+
 ## [0.4.0] - 2026-10-29
 
 ### Added — Phase 4 SSRF Protection Shield & Streaming Reader

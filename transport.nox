@@ -1,12 +1,14 @@
 # transport.nox — Transport adapter wrapping nox.http stdlib interface.
 
 import nox.http
-from nox.http import HttpResponse, HttpError, HttpTimeoutError
+from nox.http import HttpResponse, HttpError, HttpTimeoutError, HttpStream
 import nox.time
 import request
 from request import Request
 import response
 from response import Response
+import stream
+from stream import StreamResponse
 import headers
 from headers import Headers, headers_from_dict
 import errors
@@ -34,5 +36,25 @@ class TransportAdapter:
                 raise TimeoutError("Request timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te))
             except HttpError as e:
                 raise TransportError(method + " request failed for " + sanitize_url(target_url) + ": " + str(e))
+
+        raise UnsupportedFeatureError(method, "Unrecognized HTTP method: " + method)
+
+    def stream(self: TransportAdapter, req: Request) -> StreamResponse:
+        method: str = req.method
+        target_url: str = req.url
+        raw_headers: dict[str, str] = req.headers.to_dict()
+
+        if method == "GET" or method == "POST" or method == "PUT" or method == "PATCH" or method == "DELETE" or method == "HEAD" or method == "OPTIONS":
+            try:
+                t_ms: int = req.timeout_ms
+                if t_ms < 0:
+                    t_ms = 0
+                s: HttpStream = nox.http.stream(method, target_url, raw_headers, req.body, t_ms)
+                resp_headers: Headers = headers_from_dict(s.headers)
+                return StreamResponse(s.status, resp_headers, target_url, method, "", s)
+            except HttpTimeoutError as te:
+                raise TimeoutError("Stream request timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te))
+            except HttpError as e:
+                raise TransportError(method + " stream failed for " + sanitize_url(target_url) + ": " + str(e))
 
         raise UnsupportedFeatureError(method, "Unrecognized HTTP method: " + method)

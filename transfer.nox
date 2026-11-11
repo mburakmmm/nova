@@ -1,0 +1,130 @@
+import nox.time
+import nox.transfer
+from nox.transfer import download_to_file as nox_dl, upload_file as nox_ul
+import nox.http
+from nox.http import HttpResponse
+import client
+from client import Client
+import response
+from response import Response
+import headers
+from headers import Headers, headers_from_dict
+import url
+from url import resolve_url
+import ssrf
+from ssrf import SSRFPolicy
+import auth
+from auth import BasicAuth, BearerAuth
+import cookies
+from cookies import CookieJar
+
+def download_file(
+    cli: Client,
+    url_target: str,
+    target_path: str,
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
+) -> int:
+    full_url: str = resolve_url(cli.base_url, url_target, params)
+
+    s_pol: SSRFPolicy | None = cli.ssrf_policy
+    if s_pol is not None:
+        s_pol.validate_target(full_url)
+
+    req_headers: Headers = cli.default_headers.clone()
+    if headers_dict is not None:
+        req_headers.merge_dict(headers_dict)
+
+    b_auth: BasicAuth | None = cli.basic_auth
+    if b_auth is not None:
+        b_auth.apply(req_headers)
+
+    tok_auth: BearerAuth | None = cli.bearer_auth
+    if tok_auth is not None:
+        tok_auth.apply(req_headers)
+
+    jar: CookieJar | None = cli.cookies
+    if jar is not None:
+        jar.apply_to_request(full_url, req_headers)
+
+    eff_timeout: int = cli.timeout_ms
+    if timeout_ms >= 0:
+        eff_timeout = timeout_ms
+    if eff_timeout < 0:
+        eff_timeout = 0
+
+    h: dict[str, str] = req_headers.to_dict()
+    return nox_dl(full_url, target_path, h, eff_timeout)
+
+def upload_file(
+    cli: Client,
+    url_target: str,
+    source_path: str,
+    method: str = "POST",
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
+) -> Response:
+    full_url: str = resolve_url(cli.base_url, url_target, params)
+
+    s_pol: SSRFPolicy | None = cli.ssrf_policy
+    if s_pol is not None:
+        s_pol.validate_target(full_url)
+
+    req_headers: Headers = cli.default_headers.clone()
+    if headers_dict is not None:
+        req_headers.merge_dict(headers_dict)
+
+    b_auth: BasicAuth | None = cli.basic_auth
+    if b_auth is not None:
+        b_auth.apply(req_headers)
+
+    tok_auth: BearerAuth | None = cli.bearer_auth
+    if tok_auth is not None:
+        tok_auth.apply(req_headers)
+
+    jar: CookieJar | None = cli.cookies
+    if jar is not None:
+        jar.apply_to_request(full_url, req_headers)
+
+    eff_timeout: int = cli.timeout_ms
+    if timeout_ms >= 0:
+        eff_timeout = timeout_ms
+    if eff_timeout < 0:
+        eff_timeout = 0
+
+    h: dict[str, str] = req_headers.to_dict()
+    t0: int = nox.time.now_ms()
+    raw_res: HttpResponse = nox_ul(method, full_url, source_path, h, eff_timeout)
+    elapsed: int = nox.time.now_ms() - t0
+    resp_headers: Headers = headers_from_dict(raw_res.headers)
+
+    if jar is not None:
+        jar.extract_from_response(full_url, resp_headers)
+
+    res: Response = Response(raw_res.status, raw_res.body, resp_headers, full_url, method, elapsed)
+    if cli.raise_on_status:
+        res.raise_for_status()
+    return res
+
+def download(
+    url_target: str,
+    target_path: str,
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
+) -> int:
+    c: Client = Client()
+    return download_file(c, url_target, target_path, params, headers_dict, timeout_ms)
+
+def upload(
+    url_target: str,
+    source_path: str,
+    method: str = "POST",
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
+) -> Response:
+    c: Client = Client()
+    return upload_file(c, url_target, source_path, method, params, headers_dict, timeout_ms)

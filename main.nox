@@ -49,4 +49,8 @@ post_resp: Response = cli.post_json("/post", "{\"project\":\"nova\",\"language\"
 print("    POST Status Code:", post_resp.status_code)
 print("    POST Is Success:", post_resp.is_success())
 
+# 8. Connection Pooling
+cli.set_connection_pool(16, 60000)
+print("[7] Connection pooling enabled, idle connections:", cli.get_idle_connections())
+
 print("=== Nova demonstration complete ===")

@@ -2,8 +2,10 @@
 
 import nox.time
 import nox.url
+import nox.http
+from nox.http import client_pool, client_idle_connections
 import headers
-from headers import Headers
+from headers import Headers, headers_from_dict
 import url
 from url import resolve_url
 import auth
@@ -74,7 +76,7 @@ class Client:
     ) -> None:
         self.base_url = base_url
         self.default_headers = Headers()
-        self.default_headers.set("User-Agent", "Nova/0.4.0")
+        self.default_headers.set("User-Agent", "Nova/0.5.0")
         self.default_headers.set("Accept", "*/*")
         self.basic_auth = None
         self.bearer_auth = None
@@ -85,6 +87,13 @@ class Client:
         self.timeout_ms = timeout_ms
         self.ssrf_policy = ssrf_policy
         self.transport = TransportAdapter()
+
+    def set_connection_pool(self: Client, max_idle: int = 32, idle_timeout_ms: int = 90000) -> Client:
+        client_pool(max_idle, idle_timeout_ms)
+        return self
+
+    def get_idle_connections(self: Client) -> int:
+        return client_idle_connections()
 
     def set_ssrf_policy(self: Client, policy: SSRFPolicy) -> Client:
         self.ssrf_policy = policy
@@ -387,5 +396,39 @@ class Client:
         headers: dict[str, str] | None = None,
         timeout_ms: int = -1
     ) -> StreamResponse:
-        res: Response = self.request(method, url, body, "", params, headers, timeout_ms)
-        return StreamResponse(res.status_code, res.headers, res.url, res.method, res.body)
+        full_url: str = resolve_url(self.base_url, url, params)
+
+        s_pol: SSRFPolicy | None = self.ssrf_policy
+        if s_pol is not None:
+            s_pol.validate_target(full_url)
+
+        req_headers: Headers = self.default_headers.clone()
+        if headers is not None:
+            req_headers.merge_dict(headers)
+
+        b_auth: BasicAuth | None = self.basic_auth
+        if b_auth is not None:
+            b_auth.apply(req_headers)
+
+        tok_auth: BearerAuth | None = self.bearer_auth
+        if tok_auth is not None:
+            tok_auth.apply(req_headers)
+
+        jar: CookieJar | None = self.cookies
+        if jar is not None:
+            jar.apply_to_request(full_url, req_headers)
+
+        eff_timeout: int = self.timeout_ms
+        if timeout_ms >= 0:
+            eff_timeout = timeout_ms
+
+        req: Request = Request(method, full_url, req_headers, body, eff_timeout)
+        s_resp: StreamResponse = self.transport.stream(req)
+
+        if jar is not None:
+            jar.extract_from_response(full_url, s_resp.headers)
+
+        if self.raise_on_status:
+            s_resp.raise_for_status()
+
+        return s_resp

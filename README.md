@@ -1,8 +1,8 @@
 # Nova — Modern HTTP Client for Nox
 
-[![Nox Version](https://img.shields.io/badge/noxc-2.0.63-blue.svg)](https://github.com/mburakmmm/nox-lang)
+[![Nox Version](https://img.shields.io/badge/noxc-2.1.52-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-22%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-24%20passed-brightgreen.svg)]()
 
 > A pleasant, safe, predictable, production-oriented HTTP client for the **Nox programming language**, inspired by Python Requests and HTTPX.
 
@@ -115,23 +115,60 @@ if resp.is_success():
     print("Parsed JSON keys:", nox.json.object_len(data))
 ```
 
-### Streaming Response Reader
+### Streaming Response & Context Manager
 
-Read response data incrementally in chunks, lines, or binary `Buffer` blocks:
+Read response data incrementally in chunks or lines via native zero-copy socket streaming, or using the `with` statement context manager:
 
 ```nox
 import nova
 from nova import Client, StreamResponse
 
 cli: Client = Client("https://httpbin.org")
-st: StreamResponse = cli.stream("GET", "/stream/20")
 
-# Process lines incrementally:
-lines: list[str] = st.iter_lines()
-for line in lines:
-    print("Chunk line:", line)
+# Context manager guarantees the underlying socket stream is cleanly closed
+with cli.stream("GET", "/stream/20") as st:
+    chunk: str = st.read_chunk(1024)
+    print("Received first chunk:", len(chunk))
 
-st.close()
+    lines: list[str] = st.iter_lines()
+    for line in lines:
+        print("Chunk line:", line)
+```
+
+### Large File Streaming Download & Upload
+
+Directly stream files between the network and filesystem without holding multi-gigabyte files in RAM:
+
+```nox
+import nova
+import nova.transfer
+from nova import Client, Response
+from nova.transfer import download_file, upload_file
+
+cli: Client = Client("https://httpbin.org")
+
+# Stream directly to disk:
+bytes_written: int = download_file(cli, "/bytes/1048576", "large_payload.bin")
+
+# Stream directly from disk:
+resp: Response = upload_file(cli, "/post", "large_payload.bin", "POST")
+```
+
+### Connection Pooling & Keep-Alive Reuse
+
+Enable connection reuse across consecutive requests to eliminate TCP handshakes and TLS negotiation overhead:
+
+```nox
+import nova
+from nova import Client
+
+cli: Client = Client("https://httpbin.org")
+cli.set_connection_pool(max_idle=16, idle_timeout_ms=60000)
+
+# Subsequent requests transparently reuse keep-alive connections
+resp1 = cli.get("/get")
+resp2 = cli.get("/get")
+print("Active idle pool connections:", cli.get_idle_connections())
 ```
 
 ### SSRF Protection Shield
@@ -332,14 +369,15 @@ except NovaError as ne:
 | Basic & Bearer Auth | ✅ Supported | Redacted representations |
 | Per-Client CookieJar | ✅ Supported | Domain isolation, Set-Cookie parsing |
 | Exponential Backoff | ✅ Supported | Idempotency guarded, Retry-After respected |
-| PUT / PATCH / DELETE / HEAD / OPTIONS | ✅ Supported | Native stdlib `nox.http.request` transport |
+| PUT / PATCH / DELETE / HEAD / OPTIONS | ✅ Supported | Native stdlib `nox.http.request` transport, HEAD keep-alive fix |
 | Request Timeout | ✅ Supported | True socket timeout (`timeout_ms`) & `TimeoutError` |
 | Binary Body Access | ✅ Supported | Native `Response.bytes() -> Buffer` via `nox.bytes` |
-| Streaming Response Reader | ✅ Supported | Incremental chunks, `iter_bytes`, `iter_lines` (`StreamResponse`) |
+| Streaming Response Reader | ✅ Supported | Native zero-copy socket streaming, `read_chunk()`, `with` manager |
+| Large File Disk Transfer | ✅ Supported | Direct disk streaming via `nova.transfer` (`download_file` / `upload_file`) |
+| Connection Pooling | ✅ Supported | Reusable TCP/TLS pool via `client.set_connection_pool()` |
+| HTTP / HTTPS Proxy | ✅ Supported | Transparent `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` with `CONNECT` tunnel |
 | SSRF Protection Shield | ✅ Supported | Private IP, link-local, cloud metadata & IPv6 blocklist (`SSRFPolicy`) |
 | Async Concurrency | ✅ Supported | Fiber tasks via Nox runtime (`spawn` / `Task[T]`) |
-| Connection Pooling | ⏳ Planned | Requires native persistent socket pool in runtime |
-| HTTP / SOCKS Proxy | ⏳ Planned | Requires native proxy dialer in runtime |
 
 ---
 
@@ -353,7 +391,7 @@ noxc test
 
 Output:
 ```text
-22 passed, 0 failed (22 total)
+24 passed, 0 failed (24 total)
 ```
 
 Run demonstration:

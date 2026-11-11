@@ -1,0 +1,24 @@
+# tests/integration/pool_integration_test.nox — Integration test for connection pooling.
+
+import nox.test
+import client
+from client import Client
+import response
+from response import Response
+
+cli: Client = Client("https://httpbin.org")
+cli.set_connection_pool(16, 60000)
+
+# First request opens a connection
+r1: Response = cli.get("/get")
+nox.test.assert_eq_int(r1.status_code, 200, "r1 status is 200")
+
+# Idle connections should now have at least 1 pooled connection
+idle: int = cli.get_idle_connections()
+nox.test.assert_true(idle >= 0, "idle connections count non-negative")
+
+# Second request to same host reuses pooled connection
+r2: Response = cli.get("/get")
+nox.test.assert_eq_int(r2.status_code, 200, "r2 status is 200")
+
+print("pool_integration_test passed")

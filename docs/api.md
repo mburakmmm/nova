@@ -33,6 +33,18 @@ Sends an HTTP OPTIONS request.
 ### `nova.stream(method: str, url: str, body: str = "", json: str = "", params: dict[str, str] | None = None, headers: dict[str, str] | None = None, timeout_ms: int = -1) -> StreamResponse`
 Sends a request and returns an incremental `StreamResponse`.
 
+### `nova.set_connection_pool(max_idle: int = 32, idle_timeout_ms: int = 90000) -> None`
+Configures process-wide HTTP connection pool parameters.
+
+### `nova.idle_connections() -> int`
+Returns the count of active idle connections currently held in the pool.
+
+### `nova.download_to_file(url: str, target_path: str, params: dict[str, str] | None = None, headers: dict[str, str] | None = None, timeout_ms: int = -1) -> int`
+Streams remote response directly to local disk file without whole-body memory buffering. Returns HTTP status code.
+
+### `nova.upload_file(url: str, source_path: str, method: str = "POST", params: dict[str, str] | None = None, headers: dict[str, str] | None = None, timeout_ms: int = -1) -> Response`
+Streams local disk file directly to remote server without loading file into RAM. Returns Response.
+
 ### `nova.post_json(url: str, json_str: str, params: dict[str, str] | None = None, headers: dict[str, str] | None = None, timeout_ms: int = -1) -> Response`
 Sends an HTTP POST request with `Content-Type: application/json`.
 
@@ -57,6 +69,8 @@ from nova import Client, Response, StreamResponse, SSRFPolicy
 - `enable_cookies() -> Client`
 - `set_retry_policy(policy: RetryPolicy) -> Client`
 - `set_ssrf_policy(policy: SSRFPolicy) -> Client`
+- `set_connection_pool(max_idle: int = 32, idle_timeout_ms: int = 90000) -> Client`
+- `get_idle_connections() -> int`
 
 ### Request Methods
 - `get(url: str, params: dict[str, str] | None = None, headers: dict[str, str] | None = None, timeout_ms: int = -1) -> Response`
@@ -118,7 +132,22 @@ from nova import StreamResponse
 - `iter_bytes(chunk_size: int = 8192) -> list[Buffer]`: Yields all chunks as a list of binary `Buffer` blocks.
 - `iter_lines() -> list[str]`: Yields lines split by `\n` (stripping trailing `\r`).
 - `read_all() -> str`: Reads all remaining characters until EOF.
-- `close() -> None`: Closes the stream.
+- `close() -> None`: Closes the stream and releases the underlying socket.
+- `__enter__() -> StreamResponse`: Context manager entry.
+- `__exit__(exc_type, exc_val, exc_tb) -> None`: Closes stream automatically upon exiting `with` block.
+
+---
+
+## `nova.transfer` Module
+
+```nox
+from nova.transfer import download_file, upload_file, download, upload
+```
+
+- `download_file(cli: Client, url: str, target_path: str, params: dict | None = None, headers: dict | None = None, timeout_ms: int = -1) -> int`: Streams directly from socket to file on disk. Returns status code.
+- `upload_file(cli: Client, url: str, source_path: str, method: str = "POST", params: dict | None = None, headers: dict | None = None, timeout_ms: int = -1) -> Response`: Streams directly from file on disk to socket.
+- `download(url: str, target_path: str, ...) -> int`: Top-level standalone shortcut.
+- `upload(url: str, source_path: str, ...) -> Response`: Top-level standalone shortcut.
 
 ---
 

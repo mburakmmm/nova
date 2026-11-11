@@ -1,5 +1,7 @@
 # stream.nox — Streaming response model and chunked reader per AGENTS.md §16.
 
+import nox.http
+from nox.http import HttpStream
 import headers
 from headers import Headers
 import errors
@@ -18,6 +20,7 @@ class StreamResponse:
     raw_body: str
     cursor: int
     is_closed: bool
+    native_stream: HttpStream | None
 
     def __init__(
         self: StreamResponse,
@@ -25,7 +28,8 @@ class StreamResponse:
         headers: Headers,
         url: str,
         method: str,
-        raw_body: str = ""
+        raw_body: str = "",
+        native_stream: HttpStream | None = None
     ) -> None:
         self.status_code = status_code
         self.headers = headers
@@ -34,6 +38,7 @@ class StreamResponse:
         self.raw_body = raw_body
         self.cursor = 0
         self.is_closed = False
+        self.native_stream = native_stream
 
     def is_success(self: StreamResponse) -> bool:
         return self.status_code >= 200 and self.status_code <= 299
@@ -52,6 +57,13 @@ class StreamResponse:
             return ""
         if chunk_size <= 0:
             chunk_size = 4096
+
+        ns: HttpStream | None = self.native_stream
+        if ns is not None:
+            c: str = ns.read_chunk(chunk_size)
+            if len(c) == 0:
+                self.is_closed = True
+            return c
 
         total: int = len(self.raw_body)
         if self.cursor >= total:
@@ -81,6 +93,12 @@ class StreamResponse:
     def iter_lines(self: StreamResponse) -> list[str]:
         if self.is_closed:
             return []
+        ns: HttpStream | None = self.native_stream
+        if ns is not None:
+            full: str = self.read_all()
+            lines: list[str] = nox.strings.split(full, "\n")
+            return lines
+
         lines: list[str] = nox.strings.split(self.raw_body, "\n")
         self.cursor = len(self.raw_body)
         return lines
@@ -88,10 +106,32 @@ class StreamResponse:
     def read_all(self: StreamResponse) -> str:
         if self.is_closed:
             return ""
+        ns: HttpStream | None = self.native_stream
+        if ns is not None:
+            res: str = ""
+            while True:
+                part: str = self.read_chunk(65536)
+                if len(part) == 0:
+                    break
+                res = res + part
+            self.is_closed = True
+            return res
+
         remaining: str = self.raw_body[self.cursor:]
         self.cursor = len(self.raw_body)
         return remaining
 
     def close(self: StreamResponse) -> None:
-        self.is_closed = True
-        self.cursor = len(self.raw_body)
+        if not self.is_closed:
+            self.is_closed = True
+            self.cursor = len(self.raw_body)
+            ns: HttpStream | None = self.native_stream
+            if ns is not None:
+                ns.close()
+
+    def __enter__(self: StreamResponse) -> StreamResponse:
+        return self
+
+    def __exit__(self: StreamResponse) -> None:
+        self.close()
+
