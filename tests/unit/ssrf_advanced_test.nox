@@ -73,11 +73,19 @@ nox.test.assert_true(blocked(dp, "https://badip.example.com/"), "invalid resolve
 nox.test.assert_true(blocked(dp, "https://unknown.example.com/"), "unresolvable hostname blocked (fail closed)")
 nox.test.assert_true(not blocked(dp, "https://public.example.com/"), "hostname resolving to public IP allowed")
 
-# allowlisted host bypasses resolution checks explicitly
+# allowlisted host: by default (skip_dns_for_allowlist=False), resolver validates IP to prevent rebinding
 dp2: SSRFPolicy = SSRFPolicy()
 dp2.set_resolver(res)
 dp2.allow_host("internal.example.com")
-nox.test.assert_true(not blocked(dp2, "https://internal.example.com/"), "explicit allowlist overrides resolver")
+nox.test.assert_true(blocked(dp2, "https://internal.example.com/"), "allowlisted host with private IP is blocked when resolver is active")
+
+# public allowlisted host passes resolution validation
+dp2.allow_host("public.example.com")
+nox.test.assert_true(not blocked(dp2, "https://public.example.com/"), "allowlisted host with public IP passes validation")
+
+# opt-in skip_dns_for_allowlist permits allowlist to bypass resolver
+dp2.set_skip_dns_for_allowlist(True)
+nox.test.assert_true(not blocked(dp2, "https://internal.example.com/"), "skip_dns_for_allowlist=True permits allowlist to bypass DNS validation")
 
 # allow_private lets resolved private IP through
 dp3: SSRFPolicy = SSRFPolicy(True)

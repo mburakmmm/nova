@@ -2,7 +2,7 @@
 
 [![Nox Version](https://img.shields.io/badge/noxc-2.1.52-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-31%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-32%20passed-brightgreen.svg)]()
 
 > A pleasant, safe, predictable, production-oriented HTTP client for the **Nox programming language**, inspired by Python Requests and HTTPX.
 
@@ -409,13 +409,14 @@ except NovaError as ne:
 | Large File Disk Transfer | ✅ Supported | Direct disk streaming via `nova.transfer` (`download_file` / `upload_file`) |
 | Connection Pooling | ✅ Supported | Reusable TCP/TLS pool via `client.set_connection_pool()` (**process-wide** scope) |
 | HTTP / HTTPS Proxy | ✅ Supported | Transparent `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` with `CONNECT` tunnel |
-| SSRF Protection Shield | ⚠️ Partial | Real IPv4/IPv6 parser, resolver validation, strict-hostname mode. DNS-rebinding TOCTOU needs Nox runtime support — use `set_strict_hostnames(True)` for untrusted URLs |
-| Cookie Expiry / Public Suffix | ✅ Supported | `Expires`/`Max-Age`, curated PSL subset (not the full list) |
+| SSRF Protection Shield | ⚠️ Partial | Real IPv4/IPv6 parser, resolver validation, strict-hostname mode, allowlist DNS validation. DNS-rebinding TOCTOU needs Nox runtime socket pinning — use `set_strict_hostnames(True)` for untrusted URLs |
+| Safe Client Factory | ✅ Supported | `create_safe_client()` / `nova.safe_client()` with default SSRF shield, 15s timeout, 3-redirect limit, and `raise_for_status` |
+| Cookie Expiry / Public Suffix | ✅ Supported | `Expires`/`Max-Age`, expanded curated PSL subset (`psl.nox`) |
 | Multiple `Set-Cookie` | ⚠️ Partial | Nova supports it; current Nox runtime keeps only the last header |
-| Lazy Streaming | ✅ Supported | `read_line`, `for_each_line`, `for_each_chunk` (`iter_*` buffer) |
+| Lazy Streaming | ✅ Supported | `read_line`, `for_each_line`, `for_each_chunk` (`iter_*` buffer), bounded by `max_line_bytes` |
 | Retry jitter / HTTP-date `Retry-After` | ✅ Supported | Opt-in jitter |
 | Transport Injection | ✅ Supported | `Client.set_transport()`, `MockTransport` |
-| Async Concurrency | ✅ Supported | Fiber tasks via Nox runtime (`spawn` / `Task[T]`) |
+| Async Concurrency | ✅ Supported | Fiber tasks via Nox runtime (`spawn` / `Task[T]`), concurrency stress tested |
 
 ---
 
@@ -429,7 +430,7 @@ noxc test
 
 Output:
 ```text
-31 passed, 0 failed (31 total)
+32 passed, 0 failed (32 total)
 ```
 
 Run demonstration:

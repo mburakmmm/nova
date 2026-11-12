@@ -79,7 +79,7 @@ class Client:
     ) -> None:
         self.base_url = base_url
         self.default_headers = Headers()
-        self.default_headers.set("User-Agent", "Nova/0.6.0")
+        self.default_headers.set("User-Agent", "Nova/0.6.1")
         self.default_headers.set("Accept", "*/*")
         self.basic_auth = None
         self.bearer_auth = None
@@ -447,3 +447,23 @@ class Client:
             s_resp.raise_for_status()
 
         return s_resp
+
+# Factory for pre-hardened, defense-in-depth clients (e.g. for fetching user-supplied URLs).
+# Enables default SSRF blocking, sets 15s timeout, limits redirects to 3, and enables raise_for_status.
+def create_safe_client(
+    base_url: str = "",
+    timeout_ms: int = 15000,
+    max_redirects: int = 3,
+    ssrf_policy: SSRFPolicy | None = None
+) -> Client:
+    p: SSRFPolicy = SSRFPolicy()
+    if ssrf_policy is not None:
+        p = ssrf_policy
+    c: Client = Client(
+        base_url=base_url,
+        raise_for_status=True,
+        max_redirects=max_redirects,
+        timeout_ms=timeout_ms,
+        ssrf_policy=p
+    )
+    return c

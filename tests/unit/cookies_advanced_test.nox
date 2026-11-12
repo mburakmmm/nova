@@ -98,4 +98,12 @@ j9: CookieJar = jar_at(1000)
 j9.extract_from_response("https://example.com/", resp("s=1; SameSite=Strict"))
 nox.test.assert_eq_str(j9.cookies[0].same_site, "strict", "SameSite parsed")
 
+# --- Extended Public Suffix List verification ---
+import psl
+nox.test.assert_true(psl.is_public_suffix("deno.dev"), "deno.dev is public suffix")
+nox.test.assert_true(psl.is_public_suffix("supabase.co"), "supabase.co is public suffix")
+nox.test.assert_true(psl.is_public_suffix("bel.tr"), "bel.tr is public suffix")
+nox.test.assert_true(psl.is_public_suffix("render.com"), "render.com is public suffix")
+nox.test.assert_true(not psl.is_public_suffix("myapp.deno.dev"), "subdomain on deno.dev is not public suffix")
+
 print("cookies_advanced_test passed")

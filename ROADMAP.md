@@ -157,6 +157,16 @@ Source: external audit of v0.5.0 (score 8.3/10). Order = priority.
 
 ---
 
+### 🔄 Phase 6.1 — Hardening & Maintenance Release (v0.6.1 — COMPLETED)
+- [x] **6.1.1 (P1) `stream.nox` Line Length Check**: Check `len(line) > self.max_line_bytes` immediately when `nl >= 0`, and enforce `len(rest) > self.max_line_bytes` on EOF tail.
+- [x] **6.1.2 (P1) SSRF Allowlist vs. DNS Rebinding**: Add `skip_dns_for_allowlist: bool = False` to `SSRFPolicy`; validate resolved IPs even for allowlisted hosts when resolver is configured.
+- [x] **6.1.3 (P2) Safe Client Factory**: Add `create_safe_client()` and `nova.safe_client()` with default SSRF protection, strict redirect limits, and status checks.
+- [x] **6.1.4 (P2) Public Suffix List (PSL) Expansion**: Add common international ccTLDs and hosting domains to `psl.nox`.
+- [x] **6.1.5 (P2) Concurrency & Load Stress Test**: Add `tests/integration/concurrency_stress_test.nox` with concurrent fiber tasks and `MockTransport`.
+- [x] **6.1.6 (P2) Limitations & Release 0.6.1**: Update `NOX_LIMITATIONS.md`, `CHANGELOG.md`, `README.md`, bump version to `0.6.1`, test, publish, and release.
+
+---
+
 ### ⏳ Phase 7 — Stable 1.0 Release (NEXT)
 - [ ] **7.1. Public API Freeze**
 - [ ] **7.2. Pool benchmark**

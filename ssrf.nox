@@ -338,6 +338,7 @@ class SSRFPolicy:
     allow_loopback: bool
     allow_link_local: bool
     strict_hostnames: bool
+    skip_dns_for_allowlist: bool
     blocked_hosts: list[str]
     allowed_hosts: list[str]
     resolver: HostResolver | None
@@ -352,6 +353,7 @@ class SSRFPolicy:
         self.allow_loopback = allow_loopback
         self.allow_link_local = allow_link_local
         self.strict_hostnames = False
+        self.skip_dns_for_allowlist = False
         self.blocked_hosts = []
         self.allowed_hosts = []
         self.resolver = None
@@ -378,6 +380,13 @@ class SSRFPolicy:
     # This is the strongest protection available without runtime IP pinning.
     def set_strict_hostnames(self: SSRFPolicy, enabled: bool = True) -> SSRFPolicy:
         self.strict_hostnames = enabled
+        return self
+
+    # When False (default), hostnames on the allowlist still have their resolved IPs
+    # validated against private/loopback/link-local ranges when a resolver is configured.
+    # Set to True only when allowlisted hosts intentionally point to private internal IPs.
+    def set_skip_dns_for_allowlist(self: SSRFPolicy, skip: bool = True) -> SSRFPolicy:
+        self.skip_dns_for_allowlist = skip
         return self
 
     def is_host_allowed_explicitly(self: SSRFPolicy, host_lower: str) -> bool:
@@ -434,6 +443,10 @@ class SSRFPolicy:
 
         # 1. Explicit allowlist check
         if self.is_host_allowed_explicitly(host_lower):
+            r_allow: HostResolver | None = self.resolver
+            if r_allow is not None and not self.skip_dns_for_allowlist:
+                ips_allow: list[str] = r_allow.resolve(host_lower)
+                self.validate_resolved(target_url, raw_host, ips_allow)
             return
 
         # 2. Explicit blocklist check

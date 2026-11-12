@@ -5,6 +5,16 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-11-12
+
+### Security & Stream Hardening (external audit of v0.6.0)
+- **Streaming Line-Length Ordering Bug Fixed (P1)**: `StreamResponse.read_line()` now enforces `max_line_bytes` immediately upon finding a newline (`nl >= 0`) and also on EOF tails without newline. Previously, a single chunk containing a newline on an over-long line could return without raising `DecodeError`.
+- **SSRF Allowlist DNS Rebinding Prevention (P1)**: In `ssrf.nox`, `validate_target()` now validates resolved IPs against private/loopback/link-local ranges even for explicitly allowlisted hostnames when a `HostResolver` is configured (`skip_dns_for_allowlist: bool = False`). Added `set_skip_dns_for_allowlist(bool)` for intentional private internal hosts.
+- **Pre-hardened Safe Client Factory (P2)**: Added `create_safe_client()` and `nova.safe_client()` with default `SSRFPolicy` active, `raise_for_status=True`, default 15s timeout, and strict 3-redirect limit.
+- **Public Suffix List (PSL) Expansion (P2)**: Expanded curated subset in `psl.nox` with additional national ccTLD/SLDs (`.gov.uk`, `.ac.uk`, `.org.uk`, `.com.tr`, `.edu.tr`, `.gov.tr`, `.co.jp`, `.ne.jp`, `.com.br`, `.bel.tr`, `.k12.tr`, etc.) and common cloud platforms (`deno.dev`, `supabase.co`, `render.com`, `modal.run`, `koyeb.app`, `pages.dev`).
+- **Concurrency & Stress Testing (P2)**: Added `tests/integration/concurrency_stress_test.nox` testing concurrent fiber tasks with `MockTransport` and streaming lines across independent tasks.
+- **Test Suite**: 32 tests passing with 0 failures (`32 passed, 0 failed`).
+
 ## [0.6.0] - 2026-11-11
 
 ### Security & Standards Hardening (external audit of v0.5.0)

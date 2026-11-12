@@ -105,6 +105,8 @@ class StreamResponse:
                 self.line_buf = self.line_buf[nl + 1:]
                 if len(line) > 0 and line[len(line) - 1:] == "\r":
                     line = line[0:len(line) - 1]
+                if len(line) > self.max_line_bytes:
+                    raise DecodeError("Line exceeds max_line_bytes (" + str(self.max_line_bytes) + "): " + str(len(line)) + " bytes")
                 return line
             if len(self.line_buf) > self.max_line_bytes:
                 raise DecodeError("Line exceeds max_line_bytes (" + str(self.max_line_bytes) + ")")
@@ -115,6 +117,8 @@ class StreamResponse:
                     self.line_buf = ""
                     if rest[len(rest) - 1:] == "\r":
                         rest = rest[0:len(rest) - 1]
+                    if len(rest) > self.max_line_bytes:
+                        raise DecodeError("Line exceeds max_line_bytes (" + str(self.max_line_bytes) + "): " + str(len(rest)) + " bytes")
                     return rest
                 return None
             self.line_buf = self.line_buf + part

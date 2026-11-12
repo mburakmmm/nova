@@ -27,7 +27,7 @@ from mock_transport import MockTransport
 import multipart
 from multipart import MultipartEncoder, MultipartFile, file_from_path
 import client
-from client import Client
+from client import Client, create_safe_client
 import transfer
 from transfer import download_file, upload_file as transfer_upload_file, download, upload
 
@@ -179,3 +179,11 @@ def upload_file(
     timeout_ms: int = -1
 ) -> Response:
     return upload(url_target, source_path, method, params, headers_dict, timeout_ms)
+
+def safe_client(
+    base_url: str = "",
+    timeout_ms: int = 15000,
+    max_redirects: int = 3,
+    ssrf_policy: SSRFPolicy | None = None
+) -> Client:
+    return create_safe_client(base_url, timeout_ms, max_redirects, ssrf_policy)

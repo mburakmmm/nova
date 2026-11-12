@@ -69,11 +69,19 @@ Hosts are parsed with a real parser — **not** string prefixes:
 - Ranges: loopback, unspecified, link-local (`169.254/16`, `fe80::/10`), private (RFC 1918, CGNAT, `fc00::/7`, site-local), documentation/benchmark ranges, multicast/reserved, Teredo.
 - A hostname such as `fc.example.com` / `fe80.example.com` is never mistaken for an IPv6 literal.
 
-### Layer 3 — DNS-resolution validation (v0.6.0)
+### Layer 3 — DNS-resolution validation (v0.6.0 / v0.6.1)
 A hostname can resolve to a private address (or flip between public and private — DNS rebinding). Nova provides:
 - `SSRFPolicy.set_resolver(HostResolver)` — hostnames are resolved and **every** returned IP is validated; invalid output or an empty answer is rejected (**fail-closed**).
+- `SSRFPolicy.skip_dns_for_allowlist` (`bool`, default `False`) — when a resolver is configured, allowlisted hostnames also have their resolved IPs validated against private/loopback/metadata ranges, preventing DNS rebinding attacks on allowlisted partner domains. Use `set_skip_dns_for_allowlist(True)` only for internal names intentionally pointing to private IPs.
 - `SSRFPolicy.validate_resolved(url, host, ips)` — public API for callers that own a resolver.
 - `SSRFPolicy.set_strict_hostnames(True)` — only IP literals and explicitly allow-listed hostnames pass. **This is the strongest mode available today** and is recommended for untrusted URLs.
+
+### Layer 4 — Safe Client Factory (`nova.safe_client()`) (v0.6.1)
+For applications that fetch user-supplied URLs (crawlers, webhooks, proxies), `create_safe_client()` / `nova.safe_client()` returns a pre-hardened `Client`:
+- Active `SSRFPolicy()` (blocks private, loopback, and link-local ranges by default)
+- `raise_for_status = True` (fails loudly on 4xx / 5xx)
+- `timeout_ms = 15000` (bounded request timeout prevents slowloris hangs)
+- `max_redirects = 3` (tight redirect limit against loops)
 
 > [!WARNING]
 > Nox has no built-in DNS API and the runtime resolves the hostname again when connecting, so a **TOCTOU / DNS-rebinding window remains** when you rely on a resolver. Closing it requires connecting to the validated IP while verifying TLS against the original hostname — a Nox runtime feature (`NOX_LIMITATIONS.md` §14). Until then use `strict_hostnames` (or an allowlist) for untrusted input.

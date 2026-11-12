@@ -81,6 +81,26 @@ except DecodeError as de:
     too_long = True
 nox.test.assert_true(too_long, "over-long line rejected (bounded memory)")
 
+# max_line_bytes enforced on line WITH newline (single chunk containing newline on overlong line)
+s5_with_nl: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "01234567890123456789\nnext_line\n")
+s5_with_nl.max_line_bytes = 10
+nl_too_long: bool = False
+try:
+    s5_with_nl.read_line()
+except DecodeError as de_nl:
+    nl_too_long = True
+nox.test.assert_true(nl_too_long, "over-long line containing newline rejected before returning")
+
+# max_line_bytes enforced on EOF tail without newline
+s5_eof_tail: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "01234567890123456789")
+s5_eof_tail.max_line_bytes = 10
+eof_too_long: bool = False
+try:
+    s5_eof_tail.read_line()
+except DecodeError as de_eof:
+    eof_too_long = True
+nox.test.assert_true(eof_too_long, "over-long line at EOF without newline rejected")
+
 # for_each_chunk
 s6: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "abcdefghij")
 cnt: Counter = Counter()

@@ -138,7 +138,11 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
   1. `nox.net.resolve(host: str) -> list[str]` (A/AAAA).
   2. `nox.http` isteklerine `connect_ip: str` (veya bir `pre_connect` doğrulama kancası): doğrulanmış IP'ye bağlan, TLS SNI + sertifika/hostname doğrulamasını **orijinal hostname** üzerinden yap.
   3. Ortak `nox.net.ip` (IPv4/IPv6 ayrıştırma + sınıflandırma): Nova'nın `ssrf.nox` parser'ı bunun için referans olabilir; Cipher / Sentinel gibi kütüphaneler tekrar yazmak zorunda kalmaz.
-- **Nova'daki karşılığı (v0.6.0):** `HostResolver` arayüzü + `SSRFPolicy.set_resolver()` (tüm IP'ler doğrulanır, fail-closed) ve `set_strict_hostnames(True)` (en güçlü mevcut mod).
+- **Nova'daki karşılığı (v0.6.0 / v0.6.1):**
+  - `HostResolver` arayüzü + `SSRFPolicy.set_resolver()` (tüm IP'ler doğrulanır, fail-closed).
+  - `SSRFPolicy.set_strict_hostnames(True)` (en güçlü mevcut mod).
+  - `SSRFPolicy.skip_dns_for_allowlist` (varsayılan: `False`): Beyaz listedeki host adları dahi bir çözümleyici tanımlıysa DNS çözümlemesinden geçirilerek özel/loopback/metadata IP'lerine yönlenip yönlenmedikleri denetlenir.
+  - `create_safe_client()` / `nova.safe_client()` fabrika fonksiyonları ile güvenilmeyen URL'ler için varsayılan olarak SSRF korumalı, 15s zaman aşımlı ve sıkı yönlendirme sınırlı istemci oluşturulması.
 
 ---
 

@@ -1,0 +1,115 @@
+# tests/integration/concurrency_stress_test.nox — Concurrency & load stress tests with fibers.
+
+import nox.test
+import client
+from client import Client
+import response
+from response import Response
+import mock_transport
+from mock_transport import MockTransport
+import stream
+from stream import StreamResponse, LineHandler
+import headers
+from headers import Headers
+
+# ---------------------------------------------------------------------------
+# 1. Concurrent client requests using fibers & MockTransport
+# ---------------------------------------------------------------------------
+
+m: MockTransport = MockTransport()
+m.route("https://stress.test/api/0", 200, "resp_0", {"Content-Type": "text/plain"})
+m.route("https://stress.test/api/1", 200, "resp_1", {"Content-Type": "text/plain"})
+m.route("https://stress.test/api/2", 200, "resp_2", {"Content-Type": "text/plain"})
+m.route("https://stress.test/api/3", 200, "resp_3", {"Content-Type": "text/plain"})
+m.route("https://stress.test/api/4", 200, "resp_4", {"Content-Type": "text/plain"})
+m.route("https://stress.test/api/5", 200, "resp_5", {"Content-Type": "text/plain"})
+m.route("https://stress.test/api/6", 200, "resp_6", {"Content-Type": "text/plain"})
+m.route("https://stress.test/api/7", 200, "resp_7", {"Content-Type": "text/plain"})
+m.route("https://stress.test/api/8", 200, "resp_8", {"Content-Type": "text/plain"})
+m.route("https://stress.test/api/9", 200, "resp_9", {"Content-Type": "text/plain"})
+
+c: Client = Client("https://stress.test")
+c.set_transport(m)
+
+async def req_task(c_in: Client, path: str) -> str:
+    r: Response = c_in.get(path)
+    return r.text()
+
+t0: Task[str] = spawn req_task(c, "/api/0")
+t1: Task[str] = spawn req_task(c, "/api/1")
+t2: Task[str] = spawn req_task(c, "/api/2")
+t3: Task[str] = spawn req_task(c, "/api/3")
+t4: Task[str] = spawn req_task(c, "/api/4")
+t5: Task[str] = spawn req_task(c, "/api/5")
+t6: Task[str] = spawn req_task(c, "/api/6")
+t7: Task[str] = spawn req_task(c, "/api/7")
+t8: Task[str] = spawn req_task(c, "/api/8")
+t9: Task[str] = spawn req_task(c, "/api/9")
+
+res0: str = await t0
+res1: str = await t1
+res2: str = await t2
+res3: str = await t3
+res4: str = await t4
+res5: str = await t5
+res6: str = await t6
+res7: str = await t7
+res8: str = await t8
+res9: str = await t9
+
+nox.test.assert_eq_str(res0, "resp_0", "task 0 response")
+nox.test.assert_eq_str(res1, "resp_1", "task 1 response")
+nox.test.assert_eq_str(res2, "resp_2", "task 2 response")
+nox.test.assert_eq_str(res3, "resp_3", "task 3 response")
+nox.test.assert_eq_str(res4, "resp_4", "task 4 response")
+nox.test.assert_eq_str(res5, "resp_5", "task 5 response")
+nox.test.assert_eq_str(res6, "resp_6", "task 6 response")
+nox.test.assert_eq_str(res7, "resp_7", "task 7 response")
+nox.test.assert_eq_str(res8, "resp_8", "task 8 response")
+nox.test.assert_eq_str(res9, "resp_9", "task 9 response")
+
+# ---------------------------------------------------------------------------
+# 2. Concurrent Stream reading across multiple fibers
+# ---------------------------------------------------------------------------
+
+def make_stream_body(prefix: str, lines_count: int) -> str:
+    out: str = ""
+    idx: int = 0
+    while idx < lines_count:
+        out = out + prefix + ":" + str(idx) + "\n"
+        idx = idx + 1
+    return out
+
+body_a: str = make_stream_body("worker_a", 200)
+body_b: str = make_stream_body("worker_b", 200)
+body_c: str = make_stream_body("worker_c", 200)
+body_d: str = make_stream_body("worker_d", 200)
+
+h_dummy: Headers = Headers()
+
+async def count_stream_lines(body_text: str) -> int:
+    s_resp: StreamResponse = StreamResponse(200, h_dummy, "https://stream.test/", "GET", body_text)
+    count: int = 0
+    while True:
+        line_opt: str | None = s_resp.read_line()
+        if line_opt is None:
+            break
+        count = count + 1
+    return count
+
+st_a: Task[int] = spawn count_stream_lines(body_a)
+st_b: Task[int] = spawn count_stream_lines(body_b)
+st_c: Task[int] = spawn count_stream_lines(body_c)
+st_d: Task[int] = spawn count_stream_lines(body_d)
+
+cnt_a: int = await st_a
+cnt_b: int = await st_b
+cnt_c: int = await st_c
+cnt_d: int = await st_d
+
+nox.test.assert_eq_int(cnt_a, 200, "stream task a counted 200 lines")
+nox.test.assert_eq_int(cnt_b, 200, "stream task b counted 200 lines")
+nox.test.assert_eq_int(cnt_c, 200, "stream task c counted 200 lines")
+nox.test.assert_eq_int(cnt_d, 200, "stream task d counted 200 lines")
+
+print("concurrency_stress_test passed")

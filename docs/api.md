@@ -51,16 +51,22 @@ Sends an HTTP POST request with `Content-Type: application/json`.
 ### `nova.post_form(url: str, data: dict[str, str], params: dict[str, str] | None = None, headers: dict[str, str] | None = None, timeout_ms: int = -1) -> Response`
 Sends an HTTP POST request with `Content-Type: application/x-www-form-urlencoded`.
 
+### `nova.safe_client(base_url: str = "", timeout_ms: int = 15000, max_redirects: int = 3, ssrf_policy: SSRFPolicy | None = None) -> Client`
+Returns a pre-hardened `Client` instance configured for untrusted URLs with active `SSRFPolicy` (blocking private/loopback/metadata ranges), `raise_for_status=True`, default 15s timeout, and strict 3-redirect limit.
+
 ---
 
 ## `Client` Class
 
 ```nox
-from nova import Client, Response, StreamResponse, SSRFPolicy
+from nova import Client, create_safe_client, Response, StreamResponse, SSRFPolicy
 ```
 
 ### Constructor
-`Client(base_url: str = "", raise_for_status: bool = False, timeout_ms: int = -1, max_redirects: int = 5)`
+`Client(base_url: str = "", raise_for_status: bool = False, timeout_ms: int = -1, max_redirects: int = 5, ssrf_policy: SSRFPolicy | None = None)`
+
+### Factory Functions
+- `create_safe_client(base_url: str = "", timeout_ms: int = 15000, max_redirects: int = 3, ssrf_policy: SSRFPolicy | None = None) -> Client`: Pre-hardened client for untrusted destinations.
 
 ### Configuration Methods
 - `set_header(name: str, value: str) -> Client`
@@ -161,6 +167,11 @@ from nova import SSRFPolicy
 `SSRFPolicy(allow_private: bool = False, allow_loopback: bool = False, allow_link_local: bool = False)`
 
 - `validate_target(url_str: str) -> None`: Validates target host and scheme. Raises `SSRFSecurityError` if the destination targets restricted IP ranges (IPv4/IPv6 private, loopback, link-local, cloud metadata `169.254.169.254`, IPv4-mapped IPv6, or dangerous hostnames).
+- `allow_host(host: str) -> SSRFPolicy`: Adds host to explicit allowlist.
+- `block_host(host: str) -> SSRFPolicy`: Adds host to explicit blocklist.
+- `set_resolver(resolver: HostResolver) -> SSRFPolicy`: Attaches a DNS resolver to validate all resolved IP addresses (fail-closed).
+- `set_skip_dns_for_allowlist(skip: bool = True) -> SSRFPolicy`: When `False` (default), allowlisted hostnames also have their resolved IPs validated against private ranges.
+- `set_strict_hostnames(enabled: bool = True) -> SSRFPolicy`: Requires all targets to be validated IP literals or explicitly allowed hostnames.
 
 ---
 
