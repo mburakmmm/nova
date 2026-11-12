@@ -1,6 +1,6 @@
 # Nova — Modern HTTP Client for Nox
 
-[![Nox Version](https://img.shields.io/badge/noxc-2.1.52-blue.svg)](https://github.com/mburakmmm/nox-lang)
+[![Nox Version](https://img.shields.io/badge/noxc-2.1.64-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-32%20passed-brightgreen.svg)]()
 
