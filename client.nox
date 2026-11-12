@@ -23,7 +23,7 @@ from transport import Transport, TransportAdapter
 import multipart
 from multipart import MultipartEncoder, MultipartFile, file_from_path
 import ssrf
-from ssrf import SSRFPolicy
+from ssrf import SSRFPolicy, HostResolver
 import stream
 from stream import StreamResponse
 import errors
@@ -79,7 +79,7 @@ class Client:
     ) -> None:
         self.base_url = base_url
         self.default_headers = Headers()
-        self.default_headers.set("User-Agent", "Nova/0.6.1")
+        self.default_headers.set("User-Agent", "Nova/0.6.2")
         self.default_headers.set("Accept", "*/*")
         self.basic_auth = None
         self.bearer_auth = None
@@ -450,15 +450,21 @@ class Client:
 
 # Factory for pre-hardened, defense-in-depth clients (e.g. for fetching user-supplied URLs).
 # Enables default SSRF blocking, sets 15s timeout, limits redirects to 3, and enables raise_for_status.
+# If `resolver` is supplied, it is attached to the SSRFPolicy to validate all resolved IP addresses.
+# Note: Without a resolver, hostnames are screened for localhost and cloud metadata, but arbitrary
+# hostnames that dynamically resolve to private IPs require a HostResolver or strict_hostnames=True.
 def create_safe_client(
     base_url: str = "",
     timeout_ms: int = 15000,
     max_redirects: int = 3,
-    ssrf_policy: SSRFPolicy | None = None
+    ssrf_policy: SSRFPolicy | None = None,
+    resolver: HostResolver | None = None
 ) -> Client:
     p: SSRFPolicy = SSRFPolicy()
     if ssrf_policy is not None:
         p = ssrf_policy
+    if resolver is not None:
+        p.set_resolver(resolver)
     c: Client = Client(
         base_url=base_url,
         raise_for_status=True,

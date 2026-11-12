@@ -101,6 +101,59 @@ except DecodeError as de_eof:
     eof_too_long = True
 nox.test.assert_true(eof_too_long, "over-long line at EOF without newline rejected")
 
+# --- Boundary value testing (limit 10 bytes: 9 accepted, 10 accepted, 11 rejected, 4096 rejected) ---
+# 9 bytes + newline: accepted
+s_b9: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "123456789\n")
+s_b9.max_line_bytes = 10
+l_b9: str | None = s_b9.read_line()
+nox.test.assert_true(l_b9 is not None, "9 bytes line accepted with 10 max_line_bytes")
+if l_b9 is not None:
+    nox.test.assert_eq_str(l_b9, "123456789", "content 9 bytes matches")
+
+# 10 bytes + newline: accepted
+s_b10: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "1234567890\n")
+s_b10.max_line_bytes = 10
+l_b10: str | None = s_b10.read_line()
+nox.test.assert_true(l_b10 is not None, "10 bytes line accepted with 10 max_line_bytes")
+if l_b10 is not None:
+    nox.test.assert_eq_str(l_b10, "1234567890", "content 10 bytes matches")
+
+# 11 bytes + newline: rejected
+s_b11: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "12345678901\n")
+s_b11.max_line_bytes = 10
+b11_err: bool = False
+try:
+    s_b11.read_line()
+except DecodeError as de_b11:
+    b11_err = True
+nox.test.assert_true(b11_err, "11 bytes line rejected with 10 max_line_bytes")
+
+# 4096 bytes + newline: rejected
+big_buf: str = ""
+b_i: int = 0
+while b_i < 4096:
+    big_buf = big_buf + "A"
+    b_i = b_i + 1
+s_b4096: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", big_buf + "\n")
+s_b4096.max_line_bytes = 10
+b4096_err: bool = False
+try:
+    s_b4096.read_line()
+except DecodeError as de_b4096:
+    b4096_err = True
+nox.test.assert_true(b4096_err, "4096 bytes line rejected with 10 max_line_bytes")
+
+# UTF-8 multi-byte test: 3 emoji characters = 12 raw bytes (len() is 3, but byte_len() is 12)
+# With max_line_bytes = 10, it MUST be rejected!
+s_utf8: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "😀😀😀\n")
+s_utf8.max_line_bytes = 10
+utf8_err: bool = False
+try:
+    s_utf8.read_line()
+except DecodeError as de_utf8:
+    utf8_err = True
+nox.test.assert_true(utf8_err, "3 emoji characters (12 bytes) rejected when max_line_bytes is 10 despite len() == 3")
+
 # for_each_chunk
 s6: StreamResponse = StreamResponse(200, h, "https://x.test/", "GET", "abcdefghij")
 cnt: Counter = Counter()

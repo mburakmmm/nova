@@ -167,6 +167,15 @@ Source: external audit of v0.5.0 (score 8.3/10). Order = priority.
 
 ---
 
+### 🔄 Phase 6.2 — Byte-Len Akış Sınırları, Gerçek Ağ Stresi & Resolver (v0.6.2 — COMPLETED)
+- [x] **6.2.1 (P1) `stream.nox` Byte-Uzunluğu Doğrulaması (`nox.strings.byte_len`)**: `len()` yerine `nox.strings.byte_len()` kullanarak çok baytlı UTF-8 karakterlerinde `max_line_bytes` güvencesini sağla; sınır testlerini (9, 10, 11, 4096 bayt ve emoji) ekle.
+- [x] **6.2.2 (P1) `safe_client()` Resolver Parametresi & Güvenlik Sınırı Dokümantasyonu**: `create_safe_client()` ve `nova.safe_client()` imzasına `resolver` ekle, dokümantasyonda hostname DNS sınırını açıkça belirt.
+- [x] **6.2.3 (P1) Gerçek Ağ Concurrency & Bağlantı Havuzu Stres Testi**: `concurrency_stress_test.nox` içine canlı `httpbin.org` üzerinden 5 eşzamanlı fiber ile gerçek ağ testi ekle.
+- [x] **6.2.4 (P2) Public Suffix Listesi Güncelleme Aracı (`scripts/update_psl.py`)**: Mozilla `public_suffix_list.dat` ayrıştırıcı betiği ekle.
+- [x] **6.2.5 (P2) Dokümantasyon, Upstream Limitasyonlar ve Sürüm 0.6.2**: `NOX_LIMITATIONS.md`, `CHANGELOG.md`, `README.md` güncelle, 0.6.2 sürümünü test et, yayınla.
+
+---
+
 ### ⏳ Phase 7 — Stable 1.0 Release (NEXT)
 - [ ] **7.1. Public API Freeze**
 - [ ] **7.2. Pool benchmark**

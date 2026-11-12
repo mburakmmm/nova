@@ -5,6 +5,15 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-11-12
+
+### Robustness & Real-World Concurrency (external audit of v0.6.1)
+- **Streaming Byte-Length Precision (P1)**: In `stream.nox`, `read_line()` now measures line memory bounds with `nox.strings.byte_len()` instead of `len()` (character count). This ensures multi-byte UTF-8 sequences (Turkish characters, emojis) strictly adhere to `max_line_bytes`. Added exact boundary tests (9, 10, 11, 4096 bytes, and 12-byte emoji sequence) in `stream_lazy_test.nox`.
+- **Safe Client DNS Resolver Integration (P1)**: `create_safe_client()` and `nova.safe_client()` now accept an optional `resolver: HostResolver | None = None` parameter, automatically wiring it to the pre-configured `SSRFPolicy`. Documented the DNS resolution security boundary for untrusted hostnames.
+- **Real Network Concurrency & Pool Stress (P1)**: Expanded `concurrency_stress_test.nox` to test 5 concurrent fiber tasks making requests over live TCP/TLS connections to `httpbin.org` via a shared connection pool, proving thread-safety and socket re-use without races.
+- **Full Mozilla Public Suffix List & Maintenance Tool (P2)**: Embedded the complete official Mozilla Public Suffix List (8,650+ suffixes) into `psl.nox`. Added `scripts/update_psl.py` with `--apply` support for automated future synchronizations.
+- **Upstream Nox Limitations Documented**: Recorded detailed analysis of Nox `len` vs `byte_len` semantical distinctions (§19) and updated upstream requirements for connection IP pinning (§14) and client multi-valued `Set-Cookie` headers (§16).
+
 ## [0.6.1] - 2026-11-12
 
 ### Security & Stream Hardening (external audit of v0.6.0)

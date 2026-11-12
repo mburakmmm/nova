@@ -105,10 +105,11 @@ class StreamResponse:
                 self.line_buf = self.line_buf[nl + 1:]
                 if len(line) > 0 and line[len(line) - 1:] == "\r":
                     line = line[0:len(line) - 1]
-                if len(line) > self.max_line_bytes:
-                    raise DecodeError("Line exceeds max_line_bytes (" + str(self.max_line_bytes) + "): " + str(len(line)) + " bytes")
+                line_bytes: int = nox.strings.byte_len(line)
+                if line_bytes > self.max_line_bytes:
+                    raise DecodeError("Line exceeds max_line_bytes (" + str(self.max_line_bytes) + "): " + str(line_bytes) + " bytes")
                 return line
-            if len(self.line_buf) > self.max_line_bytes:
+            if nox.strings.byte_len(self.line_buf) > self.max_line_bytes:
                 raise DecodeError("Line exceeds max_line_bytes (" + str(self.max_line_bytes) + ")")
             part: str = self.read_chunk(4096)
             if len(part) == 0:
@@ -117,8 +118,9 @@ class StreamResponse:
                     self.line_buf = ""
                     if rest[len(rest) - 1:] == "\r":
                         rest = rest[0:len(rest) - 1]
-                    if len(rest) > self.max_line_bytes:
-                        raise DecodeError("Line exceeds max_line_bytes (" + str(self.max_line_bytes) + "): " + str(len(rest)) + " bytes")
+                    rest_bytes: int = nox.strings.byte_len(rest)
+                    if rest_bytes > self.max_line_bytes:
+                        raise DecodeError("Line exceeds max_line_bytes (" + str(self.max_line_bytes) + "): " + str(rest_bytes) + " bytes")
                     return rest
                 return None
             self.line_buf = self.line_buf + part

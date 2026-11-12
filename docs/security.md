@@ -76,12 +76,16 @@ A hostname can resolve to a private address (or flip between public and private 
 - `SSRFPolicy.validate_resolved(url, host, ips)` — public API for callers that own a resolver.
 - `SSRFPolicy.set_strict_hostnames(True)` — only IP literals and explicitly allow-listed hostnames pass. **This is the strongest mode available today** and is recommended for untrusted URLs.
 
-### Layer 4 — Safe Client Factory (`nova.safe_client()`) (v0.6.1)
+### Layer 4 — Safe Client Factory (`nova.safe_client()`) (v0.6.1 / v0.6.2)
 For applications that fetch user-supplied URLs (crawlers, webhooks, proxies), `create_safe_client()` / `nova.safe_client()` returns a pre-hardened `Client`:
 - Active `SSRFPolicy()` (blocks private, loopback, and link-local ranges by default)
+- Optional `resolver: HostResolver | None = None` parameter to plug DNS validation
 - `raise_for_status = True` (fails loudly on 4xx / 5xx)
 - `timeout_ms = 15000` (bounded request timeout prevents slowloris hangs)
 - `max_redirects = 3` (tight redirect limit against loops)
+
+> [!NOTE]
+> **Safe Client Boundary**: When no `resolver` is supplied, `safe_client()` screens raw IP literals, loopbacks, and known cloud metadata, but does not perform DNS resolution for arbitrary public hostnames. For strict protection against domains that dynamically resolve to internal private IPs, pass a `HostResolver` or call `policy.set_strict_hostnames(True)`.
 
 > [!WARNING]
 > Nox has no built-in DNS API and the runtime resolves the hostname again when connecting, so a **TOCTOU / DNS-rebinding window remains** when you rely on a resolver. Closing it requires connecting to the validated IP while verifying TLS against the original hostname — a Nox runtime feature (`NOX_LIMITATIONS.md` §14). Until then use `strict_hostnames` (or an allowlist) for untrusted input.
@@ -90,16 +94,17 @@ For applications that fetch user-supplied URLs (crawlers, webhooks, proxies), `c
 
 On a cross-origin hop (scheme, host or port differs — including `https → http`), Nova strips `Authorization`, `Proxy-Authorization` **and `Cookie`** — including a `Cookie` header you set manually on the client. Cookies from an enabled `CookieJar` are then re-applied *for the new URL only*. Covered by a real `Client.send()` redirect flow in `tests/unit/redirect_security_test.nox`.
 
-## 12. Cookie Expiry, Public Suffixes, Multiple Set-Cookie (v0.6.0)
+## 12. Cookie Expiry, Public Suffixes, Multiple Set-Cookie (v0.6.0 / v0.6.2)
 
 - `Expires` (IMF-fixdate / RFC 850 / asctime) and `Max-Age` (precedence over `Expires`); `Max-Age<=0` or a past `Expires` deletes the stored cookie; expired cookies are never sent.
-- Public-suffix rejection uses an embedded **curated subset** of the Mozilla PSL (`co.uk`, `com.au`, `github.io`, …) plus `CookieJar.add_public_suffix()`. It is **not** the full list — regenerate `psl.nox` from publicsuffix.org for complete coverage. A host that *is* a public suffix may only set host-only cookies.
+- Public-suffix rejection embeds the **full official Mozilla Public Suffix List** (8,650+ multi-label suffixes) and provides `scripts/update_psl.py --apply` for automated updates, alongside runtime `CookieJar.add_public_suffix()`. A host that *is* a public suffix may only set host-only cookies.
 - RFC 6265 default-path, `SameSite` recorded.
 - Multiple `Set-Cookie` values are supported when separated by `\n` (Nox's convention, `Headers.set_multi/get_all`). **The current Nox client runtime delivers only one `Set-Cookie` per response** (`NOX_LIMITATIONS.md` §16).
 
-## 13. Lazy Streaming & Memory Bounds (v0.6.0)
+## 13. Lazy Streaming & UTF-8 Byte-Bound Memory (v0.6.0 / v0.6.2)
 
-`read_line()`, `for_each_line(handler)` and `for_each_chunk(handler)` consume a body with memory bounded by one chunk plus the current line (`max_line_bytes`, default 1 MiB, raises `DecodeError`). `iter_lines()` / `iter_bytes()` buffer the whole body and are documented as such.
+`read_line()`, `for_each_line(handler)` and `for_each_chunk(handler)` consume a body with memory bounded by one chunk plus the current line (`max_line_bytes`, default 1 MiB, raises `DecodeError`).
+In v0.6.2, `max_line_bytes` measures **raw bytes** via `nox.strings.byte_len()` rather than character counts (`len()`), preventing multi-byte UTF-8 sequences (Turkish characters, emojis) from exceeding memory bounds. `iter_lines()` / `iter_bytes()` buffer the whole body and are documented as such.
 
 ## 14. Retry Hardening (v0.6.0)
 

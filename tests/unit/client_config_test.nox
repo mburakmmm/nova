@@ -5,11 +5,13 @@ import client
 from client import Client, create_safe_client
 import nova
 from nova import safe_client
+import ssrf
+from ssrf import StaticResolver, SSRFPolicy
 
 # 1. Defaults
 c1: Client = Client("https://api.example.com")
 nox.test.assert_eq_str(c1.base_url, "https://api.example.com", "base_url set")
-nox.test.assert_eq_str(c1.default_headers.get("User-Agent"), "Nova/0.6.1", "default User-Agent header")
+nox.test.assert_eq_str(c1.default_headers.get("User-Agent"), "Nova/0.6.2", "default User-Agent header")
 nox.test.assert_eq_str(c1.default_headers.get("Accept"), "*/*", "default Accept header")
 nox.test.assert_eq_int(c1.timeout_ms, 0, "default timeout_ms is 0 (unlimited)")
 
@@ -51,5 +53,14 @@ sc2: Client = safe_client("https://safe2.example.com", timeout_ms=5000, max_redi
 nox.test.assert_eq_int(sc2.timeout_ms, 5000, "custom safe timeout")
 nox.test.assert_eq_int(sc2.max_redirects, 2, "custom safe max_redirects")
 nox.test.assert_true(sc2.ssrf_policy is not None, "custom safe client has ssrf_policy")
+
+# safe_client with attached HostResolver
+res_cfg: StaticResolver = StaticResolver()
+res_cfg.add("allowed.test", ["93.184.216.34"])
+sc3: Client = safe_client("https://safe3.example.com", resolver=res_cfg)
+nox.test.assert_true(sc3.ssrf_policy is not None, "sc3 has ssrf_policy")
+p3: SSRFPolicy | None = sc3.ssrf_policy
+if p3 is not None:
+    nox.test.assert_true(p3.resolver is not None, "sc3 ssrf_policy has attached resolver")
 
 print("client_config_test passed")

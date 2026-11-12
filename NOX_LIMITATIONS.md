@@ -138,11 +138,11 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
   1. `nox.net.resolve(host: str) -> list[str]` (A/AAAA).
   2. `nox.http` isteklerine `connect_ip: str` (veya bir `pre_connect` doğrulama kancası): doğrulanmış IP'ye bağlan, TLS SNI + sertifika/hostname doğrulamasını **orijinal hostname** üzerinden yap.
   3. Ortak `nox.net.ip` (IPv4/IPv6 ayrıştırma + sınıflandırma): Nova'nın `ssrf.nox` parser'ı bunun için referans olabilir; Cipher / Sentinel gibi kütüphaneler tekrar yazmak zorunda kalmaz.
-- **Nova'daki karşılığı (v0.6.0 / v0.6.1):**
+- **Nova'daki karşılığı (v0.6.0 / v0.6.1 / v0.6.2):**
   - `HostResolver` arayüzü + `SSRFPolicy.set_resolver()` (tüm IP'ler doğrulanır, fail-closed).
   - `SSRFPolicy.set_strict_hostnames(True)` (en güçlü mevcut mod).
   - `SSRFPolicy.skip_dns_for_allowlist` (varsayılan: `False`): Beyaz listedeki host adları dahi bir çözümleyici tanımlıysa DNS çözümlemesinden geçirilerek özel/loopback/metadata IP'lerine yönlenip yönlenmedikleri denetlenir.
-  - `create_safe_client()` / `nova.safe_client()` fabrika fonksiyonları ile güvenilmeyen URL'ler için varsayılan olarak SSRF korumalı, 15s zaman aşımlı ve sıkı yönlendirme sınırlı istemci oluşturulması.
+  - `create_safe_client(resolver=...)` / `nova.safe_client(resolver=...)` fabrika fonksiyonları ile güvenilmeyen URL'ler için varsayılan olarak SSRF korumalı, 15s zaman aşımlı, sıkı yönlendirme sınırlı ve opsiyonel `HostResolver` destekli istemci oluşturulması.
 
 ---
 
@@ -155,7 +155,7 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
 ---
 
 ## 16. Yinelenen Yanıt Başlıkları (Birden Çok `Set-Cookie`)
-- **Durum:** ⚠️ **AÇIK — runtime hatası/eksiği**
+- **Durum:** ⚠️ **AÇIK — runtime hatası/eksiği (P1 upstream)**
 - **Detay:** Canlı doğrulandı: `httpbin.org/cookies/set?a=1&b=2` iki `Set-Cookie` döndürür, ancak `nox.http` istemcisinin `HttpResponse.headers: dict[str, str]` alanında yalnızca **sonuncusu** (`b=2`) kalır; `a=1` kaybolur. (Sunucu tarafı için `nox.http.multi` `\n` ile birleştirir; istemci tarafı simetrik değildir.)
 - **Önerilen Nox değişikliği:** İstemci yanıtında yinelenen başlıkları `nox.http.multi` ile aynı `\n` kuralıyla birleştirmek (veya `HttpResponse.header_list: list[tuple[str,str]]`).
 - **Nova'daki karşılığı (v0.6.0):** `Headers.set_multi/get_all`, `response_headers_from_dict` ve `CookieJar` çoklu `Set-Cookie` değerlerini `\n` ile destekler; runtime düzelince ek değişiklik gerekmez.
@@ -172,8 +172,15 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
 
 ## 18. Modül Düzeyinde Değiştirilebilir Durum ve `while True` Dönüş Analizi
 - **Durum:** ℹ️ **BİLGİ**
-- `global` ile modül değişkeni atanamadığından (Public Suffix listesi gibi) çalışma-zamanı genişletmeleri nesne alanlarında tutulur (`CookieJar.add_public_suffix`).
+- `global` ile modül değişkeni atanamadığından çalışma-zamanı genişletmeleri nesne alanlarında tutulur (`CookieJar.add_public_suffix`).
 - `while True:` içinde `return` olsa bile fonksiyon sonuna `return` gerekir (`MissingReturn`).
+
+---
+
+## 19. Nox Karakter Sayısı (`len`) ve Bayt Uzunluğu (`nox.strings.byte_len`) Semantiği
+- **Durum:** ℹ️ **BİLGİ / KÜTÜPHANE UYUMU (Nova v0.6.2)**
+- **Detay:** Nox dilinde yerleşik `len(s: str)` fonksiyonu Unicode kod noktası (karakter sayısı) döndürmektedir (`len("ğ") == 1`, `len("😀") == 1`). Ancak ağ ve akış protokollerinde (HTTP satır sınırları, `max_line_bytes`, Content-Length) ham bayt sayısı (`byte_len`) esastır (`byte_len("ğ") == 2`, `byte_len("😀") == 4`).
+- **Nova'daki karşılığı (v0.6.2):** `StreamResponse.read_line()` içinde bellek sınırları `len(s)` yerine doğrudan `nox.strings.byte_len(s)` ile ölçülür; böylece çok baytlı UTF-8 karakterlerinde `max_line_bytes` güvencesi tam olarak sağlanır.
 
 ---
 

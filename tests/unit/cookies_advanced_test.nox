@@ -103,7 +103,7 @@ import psl
 nox.test.assert_true(psl.is_public_suffix("deno.dev"), "deno.dev is public suffix")
 nox.test.assert_true(psl.is_public_suffix("supabase.co"), "supabase.co is public suffix")
 nox.test.assert_true(psl.is_public_suffix("bel.tr"), "bel.tr is public suffix")
-nox.test.assert_true(psl.is_public_suffix("render.com"), "render.com is public suffix")
+nox.test.assert_true(psl.is_public_suffix("onrender.com"), "onrender.com is public suffix")
 nox.test.assert_true(not psl.is_public_suffix("myapp.deno.dev"), "subdomain on deno.dev is not public suffix")
 
 print("cookies_advanced_test passed")

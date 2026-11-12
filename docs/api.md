@@ -51,22 +51,22 @@ Sends an HTTP POST request with `Content-Type: application/json`.
 ### `nova.post_form(url: str, data: dict[str, str], params: dict[str, str] | None = None, headers: dict[str, str] | None = None, timeout_ms: int = -1) -> Response`
 Sends an HTTP POST request with `Content-Type: application/x-www-form-urlencoded`.
 
-### `nova.safe_client(base_url: str = "", timeout_ms: int = 15000, max_redirects: int = 3, ssrf_policy: SSRFPolicy | None = None) -> Client`
-Returns a pre-hardened `Client` instance configured for untrusted URLs with active `SSRFPolicy` (blocking private/loopback/metadata ranges), `raise_for_status=True`, default 15s timeout, and strict 3-redirect limit.
+### `nova.safe_client(base_url: str = "", timeout_ms: int = 15000, max_redirects: int = 3, ssrf_policy: SSRFPolicy | None = None, resolver: HostResolver | None = None) -> Client`
+Returns a pre-hardened `Client` instance configured for untrusted URLs with active `SSRFPolicy` (blocking private/loopback/metadata ranges), optional DNS `resolver`, `raise_for_status=True`, default 15s timeout, and strict 3-redirect limit.
 
 ---
 
 ## `Client` Class
 
 ```nox
-from nova import Client, create_safe_client, Response, StreamResponse, SSRFPolicy
+from nova import Client, create_safe_client, Response, StreamResponse, SSRFPolicy, HostResolver
 ```
 
 ### Constructor
 `Client(base_url: str = "", raise_for_status: bool = False, timeout_ms: int = -1, max_redirects: int = 5, ssrf_policy: SSRFPolicy | None = None)`
 
 ### Factory Functions
-- `create_safe_client(base_url: str = "", timeout_ms: int = 15000, max_redirects: int = 3, ssrf_policy: SSRFPolicy | None = None) -> Client`: Pre-hardened client for untrusted destinations.
+- `create_safe_client(base_url: str = "", timeout_ms: int = 15000, max_redirects: int = 3, ssrf_policy: SSRFPolicy | None = None, resolver: HostResolver | None = None) -> Client`: Pre-hardened client for untrusted destinations.
 
 ### Configuration Methods
 - `set_header(name: str, value: str) -> Client`

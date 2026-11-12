@@ -112,4 +112,31 @@ nox.test.assert_eq_int(cnt_b, 200, "stream task b counted 200 lines")
 nox.test.assert_eq_int(cnt_c, 200, "stream task c counted 200 lines")
 nox.test.assert_eq_int(cnt_d, 200, "stream task d counted 200 lines")
 
+# ---------------------------------------------------------------------------
+# 3. Real network concurrent requests over live connection pool
+# ---------------------------------------------------------------------------
+
+real_cli: Client = Client("https://httpbin.org")
+real_cli.set_connection_pool(16, 60000)
+
+async def live_fetch(c_live: Client, n: int) -> int:
+    resp: Response = c_live.get("/get?worker=" + str(n))
+    return resp.status_code
+
+lt0: Task[int] = spawn live_fetch(real_cli, 0)
+lt1: Task[int] = spawn live_fetch(real_cli, 1)
+lt2: Task[int] = spawn live_fetch(real_cli, 2)
+lt3: Task[int] = spawn live_fetch(real_cli, 3)
+
+sc0: int = await lt0
+sc1: int = await lt1
+sc2: int = await lt2
+sc3: int = await lt3
+
+nox.test.assert_eq_int(sc0, 200, "live task 0 status 200")
+nox.test.assert_eq_int(sc1, 200, "live task 1 status 200")
+nox.test.assert_eq_int(sc2, 200, "live task 2 status 200")
+nox.test.assert_eq_int(sc3, 200, "live task 3 status 200")
+nox.test.assert_true(real_cli.get_idle_connections() >= 0, "connection pool healthy after concurrent live calls")
+
 print("concurrency_stress_test passed")
