@@ -59,13 +59,23 @@ jobs:
         run: |
           noxc version
 
-      - name: Verify Pure-Nox Core on WASM & Mobile Targets
+      - name: Verify Pure-Nox Core on Mobile Targets
         run: |
-          noxc check --target wasm32-wasi nova.nox
-          noxc check --target wasm32-freestanding nova.nox
           noxc check --target ios-arm64 nova.nox
           noxc check --target android-arm64 nova.nox
+
+      - name: Install Zig 0.16.0 & Verify WASM Targets (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSL -o /tmp/zig.tar.xz "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz"
+          tar -xf /tmp/zig.tar.xz -C /tmp
+          echo "/tmp/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+          export PATH="/tmp/zig-x86_64-linux-0.16.0:$PATH"
+          noxc check --target wasm32-wasi nova.nox
+          noxc check --target wasm32-freestanding nova.nox
           noxc check --target wasm32-wasi tests/unit/codec_fallback_test.nox
+          noxc build --target wasm32-wasi nova.nox -o /tmp/nova_ci.wasm
+          rm -f /tmp/nova_ci.wasm
 
       - name: Generate & Verify CycloneDX 1.5 SBOM
         shell: pwsh
