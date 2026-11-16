@@ -11,7 +11,7 @@ from nox.url import URL
 import httpdate
 from httpdate import parse_http_date
 import psl
-from psl import is_public_suffix
+from psl import is_public_suffix, is_public_suffix_with_extras
 
 def _validate_cookie_token(token: str) -> None:
     i: int = 0
@@ -124,22 +124,14 @@ class CookieJar:
             return self.now_override_s
         return nox.time.now_ms() // 1000
 
-    # Extend the embedded public-suffix subset with an application-specific suffix.
+    # Extend the embedded public-suffix list with an exact, wildcard (`*.tld`), or exception (`!host.tld`) rule.
     def add_public_suffix(self: CookieJar, suffix: str) -> None:
         l: list[str] = self.extra_suffixes
-        l.append(nox.strings.lower(suffix))
+        l.append(nox.strings.lower(nox.strings.trim(suffix)))
         self.extra_suffixes = l
 
     def _is_public_suffix(self: CookieJar, domain: str) -> bool:
-        if is_public_suffix(domain):
-            return True
-        d: str = nox.strings.lower(domain)
-        i: int = 0
-        while i < len(self.extra_suffixes):
-            if self.extra_suffixes[i] == d:
-                return True
-            i = i + 1
-        return False
+        return is_public_suffix_with_extras(domain, self.extra_suffixes)
 
     def purge_expired(self: CookieJar) -> int:
         now: int = self.now_s()

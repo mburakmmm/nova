@@ -1,0 +1,117 @@
+# tests/unit/stream_lifecycle_pipeline_test.nox — Tests deterministic stream cleanup on errors,
+# unified redirect/retry pipeline in Client.stream(), and CookieJar + ContentDecoder sync in UploadStream.
+
+import nox.test
+import nox.base64
+import client
+from client import Client
+import mock_transport
+from mock_transport import MockTransport
+import cookies
+from cookies import CookieJar
+import retry
+from retry import RetryPolicy
+import stream
+from stream import StreamResponse, UploadStream
+import response
+from response import Response
+import errors
+from errors import HttpStatusError, TransportError
+import brotli_codec
+from brotli_codec import BrotliDecoder
+
+# 1. Client.stream() closes stream deterministically when raise_for_status triggers
+mt1: MockTransport = MockTransport()
+mt1.add_response(404, "not found")
+cli1: Client = Client("https://api.example.com", True)
+cli1.set_transport(mt1)
+
+err404: bool = False
+try:
+    _sr: StreamResponse = cli1.stream("GET", "/missing")
+except HttpStatusError as he:
+    err404 = True
+    nox.test.assert_eq_int(he.status_code, 404, "stream raise_for_status status is 404")
+
+nox.test.assert_true(err404, "Client.stream raises HttpStatusError on 404 when raise_for_status=True")
+nox.test.assert_eq_int(len(mt1.streams), 1, "MockTransport recorded 1 opened stream")
+nox.test.assert_true(mt1.streams[0].is_closed, "failed stream is closed deterministically on raise_for_status error")
+
+# 2. Client.stream() follows redirects safely: closes intermediate stream, strips cross-origin auth/cookie, preserves CookieJar
+mt2: MockTransport = MockTransport()
+mt2.add_response(302, "redirecting", {"Location": "https://cdn.other.com/file.txt", "Set-Cookie": "edge=hop1; Path=/"})
+mt2.add_response(200, "final-stream-body", {"Set-Cookie": "cdn=ok; Path=/"})
+
+cli2: Client = Client("https://api.example.com")
+cli2.set_transport(mt2)
+cli2.set_bearer_auth("secret_token_999")
+cli2.enable_cookies()
+jar2: CookieJar | None = cli2.cookies
+nox.test.assert_true(jar2 is not None, "cookie jar enabled on cli2")
+
+final_sr: StreamResponse = cli2.stream("GET", "/download")
+nox.test.assert_eq_int(mt2.request_count(), 2, "stream followed redirect across 2 requests")
+nox.test.assert_true(mt2.streams[0].is_closed, "intermediate 302 redirect stream was closed automatically")
+nox.test.assert_true(not mt2.streams[1].is_closed, "final 200 stream remains open for caller consumption")
+nox.test.assert_eq_str(final_sr.read_all(), "final-stream-body", "final stream body readable")
+final_sr.close()
+
+nox.test.assert_eq_str(mt2.requests[0].headers.get("Authorization"), "Bearer secret_token_999", "initial stream request had auth")
+nox.test.assert_true(not mt2.requests[1].headers.has("Authorization"), "Authorization stripped on cross-origin stream redirect")
+if jar2 is not None:
+    nox.test.assert_eq_str(jar2.to_cookie_header("https://api.example.com/"), "edge=hop1", "redirect Set-Cookie saved in CookieJar")
+    nox.test.assert_eq_str(jar2.to_cookie_header("https://cdn.other.com/"), "cdn=ok", "destination Set-Cookie saved for target origin")
+
+# 3. Client.stream() retries idempotent requests (including PUT!) and closes failed attempt stream before retry
+mt3: MockTransport = MockTransport()
+mt3.add_response(503, "busy")
+mt3.add_response(200, "recovered")
+
+cli3: Client = Client("https://api.example.com")
+cli3.set_transport(mt3)
+cli3.set_retry_policy(RetryPolicy(2, 1, 5))
+
+sr_put: StreamResponse = cli3.stream("PUT", "/item", "body")
+nox.test.assert_eq_int(mt3.request_count(), 2, "idempotent PUT retried in Client.stream()")
+nox.test.assert_true(mt3.streams[0].is_closed, "retry attempt stream closed before retrying")
+nox.test.assert_eq_str(sr_put.read_all(), "recovered", "retried PUT stream succeeded")
+sr_put.close()
+
+# 4. UploadStream extracts Set-Cookie into Client.cookies, decodes Brotli response, and cleans up on raise_for_status
+utf_br: str = nox.base64.decode("H9cO+J0Jtq2C9RA3x6y3KNHk8ppt+C5snqbaJgjZW1wYIuTPAECxd5IN")
+expected_utf: str = "héllo wörld çay " * 200
+
+mt4: MockTransport = MockTransport()
+mt4.add_response(201, utf_br, {"Set-Cookie": "up_sid=ok123; Path=/", "Content-Encoding": "br"})
+mt4.add_response(500, "err", {"Set-Cookie": "err_trace=t9; Path=/"})
+
+cli4: Client = Client("https://api.example.com", True)
+cli4.set_transport(mt4)
+cli4.enable_cookies()
+cli4.set_content_decoder(BrotliDecoder())
+jar4: CookieJar | None = cli4.cookies
+
+up1: UploadStream = cli4.stream_upload("POST", "/upload")
+up1.write("payload")
+res_up: Response = up1.finish()
+nox.test.assert_eq_int(res_up.status_code, 201, "UploadStream finish status 201")
+nox.test.assert_eq_str(res_up.body, expected_utf, "UploadStream decoded Content-Encoding: br response")
+nox.test.assert_true(up1.is_closed, "UploadStream closed after finish()")
+if jar4 is not None:
+    nox.test.assert_eq_str(jar4.to_cookie_header("https://api.example.com/"), "up_sid=ok123", "UploadStream synced Set-Cookie to Client CookieJar")
+
+# Error path without `with`: finish() throws HttpStatusError AND still closes stream + records cookie
+up2: UploadStream = cli4.stream_upload("POST", "/upload-fail")
+up2.write("bad")
+up_err: bool = False
+try:
+    _r2: Response = up2.finish()
+except HttpStatusError as he2:
+    up_err = True
+    nox.test.assert_eq_int(he2.status_code, 500, "UploadStream 500 status raised")
+nox.test.assert_true(up_err, "UploadStream finish raised on 500")
+nox.test.assert_true(up2.is_closed, "UploadStream closed automatically when finish() throws HttpStatusError")
+if jar4 is not None:
+    nox.test.assert_eq_str(jar4.to_cookie_header("https://api.example.com/"), "up_sid=ok123; err_trace=t9", "CookieJar still updated even before raise_for_status error")
+
+print("stream_lifecycle_pipeline_test passed")

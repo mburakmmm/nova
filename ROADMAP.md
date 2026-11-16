@@ -187,11 +187,21 @@ Source: external audit of v0.5.0 (score 8.3/10). Order = priority.
 
 ---
 
-### ⏳ Phase 7 — Stable 1.0 Release (NEXT — Deferred intentionally post-v0.7.0)
-- [ ] **7.1. Public API Freeze**
-- [ ] **7.2. Pool benchmark**
-- [ ] **7.3. Security checklist sign-off**
-- [ ] **7.4. Tag v1.0.0**
+### ✅ Phase 6.4 — Security, PSL Wildcards & Streaming Correctness (v0.7.1 — COMPLETED)
+Source: external audit of v0.7.0.
+- [x] **6.4.1 (P0) Full PSL Wildcards & Exceptions**: Updated `scripts/update_psl.py` and `psl.nox` to parse and evaluate all `8,692` exact + `314` `*.` wildcard + `8` `!` exception rules (`is_public_suffix()`, `public_suffix()`, `CookieJar` runtime wildcard/exception overrides).
+- [x] **6.4.2 (P0) SSRF Resolver Boundary Guard**: Added `SSRFPolicy.set_require_dns_or_allowlist()` and `create_safe_client(..., require_dns_or_allowlist=...)` fail-closed mode when no `HostResolver` is attached (`NOX_LIMITATIONS.md` §14 tracks runtime IP pinning).
+- [x] **6.4.3 (P1) Streaming Resource Cleanup & CookieJar/Decoder Consistency**: Deterministic stream cleanup on `raise_for_status()`, redirect hops, and retry attempts in both `Client.stream()` and `UploadStream.finish()`; synchronized `Set-Cookie` extraction and `ContentDecoder` processing in `UploadStream`.
+- [x] **6.4.4 (P1) Honest HTTP/3 Status Tracking**: Documented `NOX_LIMITATIONS.md` §22 (portable custom CA trust needed in `nox.http` for cross-OS self-signed QUIC loopback verification in v0.8.0).
+- [x] **6.4.5 (P2) Unified Stream Pipeline & Idempotent `PUT`/`DELETE` Retries**: Shared request preparation, redirect handling, and retry logic between `Client.send()` and `Client.stream()`, and added RFC 9110 idempotent `PUT`/`DELETE` to `RetryPolicy` defaults.
+- [x] **6.4.6 GitHub Release & Central Registry**: Publish GitHub Release for `v0.7.1` alongside updated central index metadata.
+
+---
+
+### ⏳ Phase 7 — Runtime Parity, Production Hardening & 1.0 Candidate (NEXT)
+- **v0.8.0 — Runtime Integration**: Verified IP-pinned connect in `nox.http` (closing DNS-rebinding TOCTOU), multi-value client `Set-Cookie` forwarding, and custom-CA QUIC/HTTP3 protocol integration test.
+- **v0.9.0 — Production Hardening**: Safer default timeout evaluation (`timeout_ms > 0`), fault-injection & soak testing.
+- **v1.0.0 — API Freeze**: SemVer guarantees, pool benchmark, security audit sign-off.
 
 ---
 

@@ -1,0 +1,71 @@
+# tests/unit/ssrf_dns_boundary_test.nox — Tests fail-closed SSRF DNS-required guard and idempotent PUT/DELETE retry defaults.
+
+import nox.test
+import client
+from client import Client, create_safe_client
+import nova
+from nova import safe_client
+import ssrf
+from ssrf import SSRFPolicy, StaticResolver
+import retry
+from retry import RetryPolicy
+import mock_transport
+from mock_transport import MockTransport
+import response
+from response import Response
+import errors
+from errors import SSRFSecurityError
+
+# 1. Fail-closed SSRF mode when no HostResolver is attached
+sc_strict: Client = safe_client("", 15000, 3, None, None, True)
+mt: MockTransport = MockTransport()
+mt.add_response(200, "never")
+sc_strict.set_transport(mt)
+
+blocked_unverified: bool = False
+try:
+    _r1: Response = sc_strict.get("https://arbitrary-unverified.example.com/hook")
+except SSRFSecurityError:
+    blocked_unverified = True
+nox.test.assert_true(blocked_unverified, "require_dns_or_allowlist rejects unverified hostnames when resolver is absent")
+
+# Explicitly allowlisted host passes even without resolver
+mt.add_response(200, "ok-allow")
+pol_allow: SSRFPolicy = SSRFPolicy()
+pol_allow.set_require_dns_or_allowlist(True)
+pol_allow.allow_host("partner.example.com")
+sc_allow: Client = create_safe_client("", 15000, 3, pol_allow, None, True)
+sc_allow.set_transport(mt)
+r_allow: Response = sc_allow.get("https://partner.example.com/data")
+nox.test.assert_eq_int(r_allow.status_code, 200, "allowlisted host passes fail-closed mode")
+
+# Attaching a HostResolver allows resolved public IPs and still rejects private IPs / empty answers
+res: StaticResolver = StaticResolver()
+res.add("good.example.com", ["93.184.216.34"])
+res.add("rebind.example.com", ["10.0.0.5"])
+sc_resolved: Client = safe_client("", 15000, 3, None, res, True)
+mt.add_response(200, "resolved-ok")
+sc_resolved.set_transport(mt)
+r_res: Response = sc_resolved.get("https://good.example.com/api")
+nox.test.assert_eq_int(r_res.status_code, 200, "resolved public IP passes fail-closed mode")
+
+rebind_blocked: bool = False
+try:
+    _r_bad: Response = sc_resolved.get("https://rebind.example.com/api")
+except SSRFSecurityError:
+    rebind_blocked = True
+nox.test.assert_true(rebind_blocked, "resolved private IP blocked")
+
+# 2. RetryPolicy RFC 9110 idempotent methods include PUT and DELETE by default
+rp: RetryPolicy = RetryPolicy(2, 1, 5)
+nox.test.assert_true(rp.should_retry_status("PUT", 0, 503), "PUT is idempotent and retried by default")
+nox.test.assert_true(rp.should_retry_status("DELETE", 0, 502), "DELETE is idempotent and retried by default")
+nox.test.assert_true(rp.should_retry_error("PUT", 0), "PUT transport error retried by default")
+nox.test.assert_true(rp.should_retry_error("DELETE", 0), "DELETE transport error retried by default")
+nox.test.assert_true(not rp.should_retry_status("POST", 0, 503), "POST remains non-retryable by default")
+
+rp_no_pd: RetryPolicy = RetryPolicy(2, 1, 5, True, False, False)
+nox.test.assert_true(not rp_no_pd.should_retry_status("PUT", 0, 503), "PUT retry can be disabled explicitly")
+nox.test.assert_true(not rp_no_pd.should_retry_status("DELETE", 0, 503), "DELETE retry can be disabled explicitly")
+
+print("ssrf_dns_boundary_test passed")

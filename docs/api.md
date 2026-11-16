@@ -234,3 +234,19 @@ from nova import RetryPolicy
 ### Unified Fast JSON Adapter (`json_adapter.nox` + Desktop `yyjson_adapter.nox`)
 - Pure-Nox Core (desktop, WASM, iOS, Android): `JsonDocument`, `NoxJsonDocument`, `JsonReader`, `NoxJsonReader` (`parse`, `parse_response`, `get`, `get_str`, `get_int`, `get_float`, `get_bool`, `has`, `array_len`, `array_get`, `dump`, `dump_pretty`).
 - Opt-in Desktop (`nox.yyjson`, `noxclibs.a`): `yyjson_adapter.YyJsonDocument`, `yyjson_adapter.YyJsonReader(relaxed=False, json5=False)`, `yyjson_adapter.parse_yyjson(raw, relaxed, json5)`, `yyjson_adapter.parse_yyjson_response(resp, relaxed, json5)`, `yyjson_adapter.is_yyjson_supported()`.
+
+---
+
+## v0.7.1 additions
+
+### Full PSL Prevailing-Rule Engine (`psl.nox` & `cookies.nox`)
+- `psl.public_suffix(domain_in, extras=None) -> str` — computes effective TLD (eTLD) across exact, `*.` wildcard, and `!` exception rules.
+- `psl.is_public_suffix_with_extras(domain_in, extras) -> bool` — prevailing-rule suffix check combining embedded Mozilla PSL with `CookieJar` runtime rules (`"*.tld"`, `"!host.tld"`, `"exact.tld"`).
+
+### Streaming Lifecycle & Unified Pipeline (`client.nox` & `stream.nox`)
+- `Client.stream()` now follows redirects (with cross-origin `Authorization`/`Cookie` stripping and intermediate stream closure), retries transient failures, extracts `Set-Cookie`, and guarantees `StreamResponse.close()` if `raise_for_status()` throws.
+- `UploadStream.finish()` / `finish_stream()` now synchronize `Set-Cookie` into `Client.cookies`, apply `Client.content_decoder` (e.g. `BrotliDecoder`), and close the stream deterministically on exceptions.
+
+### SSRF & Idempotent Retry Hardening
+- `SSRFPolicy.set_require_dns_or_allowlist(enabled=True)` and `create_safe_client(..., require_dns_or_allowlist=False)` / `nova.safe_client(..., require_dns_or_allowlist=False)`.
+- `RetryPolicy(..., retry_put_delete=True)` — retries RFC 9110 idempotent `PUT` and `DELETE` methods alongside `GET`/`HEAD`/`OPTIONS` by default (`POST` remains opt-in).

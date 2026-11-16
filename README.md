@@ -2,7 +2,7 @@
 
 [![Nox Version](https://img.shields.io/badge/noxc-2.1.186-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-38%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-41%20passed-brightgreen.svg)]()
 
 > A pleasant, safe, predictable, production-oriented HTTP client for the **Nox programming language**, inspired by Python Requests and HTTPX.
 
@@ -57,7 +57,7 @@ Add Nova to your `nox.json`:
   "version": "0.1.0",
   "entry": "main.nox",
   "requires": [
-    { "alias": "nova", "repo": "github.com/mburakmmm/nova", "ref": "v0.7.0" }
+    { "alias": "nova", "repo": "github.com/mburakmmm/nova", "ref": "v0.7.1" }
   ]
 }
 ```
@@ -411,11 +411,11 @@ except NovaError as ne:
 | HTTP / HTTPS Proxy | ✅ Supported | Transparent `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` with `CONNECT` tunnel |
 | SSRF Protection Shield | ⚠️ Partial | Real IPv4/IPv6 parser, resolver validation, strict-hostname mode, allowlist DNS validation. DNS-rebinding TOCTOU needs Nox runtime socket pinning — use `set_strict_hostnames(True)` for untrusted URLs |
 | Safe Client Factory | ✅ Supported | `create_safe_client()` / `nova.safe_client()` with default SSRF shield, optional `HostResolver`, 15s timeout, 3-redirect limit, and `raise_for_status` |
-| Cookie Expiry / Public Suffix | ✅ Supported | `Expires`/`Max-Age`, O(1) lookup over full Mozilla PSL (8,650+ suffixes, ~0.03 µs/check) |
+| Cookie Expiry / Public Suffix | ✅ Supported | `Expires`/`Max-Age`, full Mozilla PSL (`8,692` exact + `314` wildcard `*.` + `8` exception `!` O(1) prevailing rules) |
 | Multiple `Set-Cookie` | ⚠️ Partial | Nova supports it; current Nox runtime keeps only the last header |
-| Lazy Streaming | ✅ Supported | `read_line`, `for_each_line`, `for_each_chunk` (`iter_*` buffer), bounded by `max_line_bytes` measuring raw UTF-8 bytes |
-| Streaming Request Upload | ✅ Supported | `UploadStream` via `Client.stream_upload` / `nova.stream_upload` (chunked `-1` & fixed `Content-Length`) |
-| HTTP/3 (QUIC / Alt-Svc) | ✅ Supported | `Client.set_http3(True)` / `nova.set_http3(True)` (**process-wide**; transparent TCP fallback) |
+| Lazy Streaming & Pipeline | ✅ Supported | `read_line`, `for_each_line`, `for_each_chunk`, redirect/retry pipeline & deterministic `close()` on errors |
+| Streaming Request Upload | ✅ Supported | `UploadStream` via `Client.stream_upload` / `nova.stream_upload` (CookieJar + ContentDecoder sync, deterministic cleanup) |
+| HTTP/3 (QUIC / Alt-Svc) | ⚠️ Experimental | `Client.set_http3(True)` / `nova.set_http3(True)` toggle & TCP fallback verified; QUIC loopback needs custom-CA in `nox.http` (`v0.8.0`) |
 | Brotli (`Content-Encoding: br`) | 🖥️ Desktop Opt-In + Fallback | Opt-in `brotli_codec.BrotliDecoder` (`nox.brotli`) on desktop; WASM & mobile compile with `FallbackContentDecoder` |
 | Fast JSON (`yyjson`) | 🖥️ Desktop Opt-In + Fallback | Opt-in `yyjson_adapter.YyJsonReader` (`nox.yyjson`) on desktop; pure `NoxJsonReader` (`nox.json`) fallback everywhere |
 | WASM & Mobile Target Safety | ✅ Verified | `nova.nox` core compiles cleanly on `wasm32-wasi`, `wasm32-freestanding`, `ios-arm64`, and `android-arm64` |
@@ -465,7 +465,7 @@ noxc test
 
 Output:
 ```text
-38 passed, 0 failed (38 total)
+41 passed, 0 failed (41 total)
 ```
 
 Run demonstration:

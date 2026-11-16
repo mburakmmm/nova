@@ -192,9 +192,16 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
 ---
 
 ## 21. Akışlı Yükleme (`stream_upload`) ve HTTP/3 (`set_http3`) Desteği
-- **Durum:** ✅ **ÇÖZÜLDÜ (Nox v2.1.116 & v2.0.152 / Nova v0.7.0)**
+- **Durum:** ✅ **ÇÖZÜLDÜ (Nox v2.1.116 & v2.0.152 / Nova v0.7.0)** / ⚠️ **Gerçek QUIC Doğrulama Notu (§22)**
 - **Detay:** `nox.http.stream_upload()` chunked ve sabit boyutlu artımlı yükleme sağlar; `nox.http.set_http3(true)` ise `Alt-Svc: h3` keşfiyle süreç-geneli HTTP/3 desteği açar (UDP/OpenSSL 3.5 yoksa şeffaf TCP geri dönüşü).
-- **Nova'daki karşılığı (v0.7.0):** `Client.stream_upload()`, `UploadStream`, `Client.set_http3()` ve `nova.set_http3()` ile entegre edildi.
+- **Nova'daki karşılığı (v0.7.0 / v0.7.1):** `Client.stream_upload()`, `UploadStream` (CookieJar/ContentDecoder senkronizasyonu ve deterministik cleanup ile), `Client.set_http3()` ve `nova.set_http3()` entegre edildi.
+
+---
+
+## 22. İstemci Tarafında Özel CA / Sertifika Güvenliği (`nox.http` HTTP/3 Yerel Test Sınırı)
+- **Durum:** ⚠️ **AÇIK (v0.8.0 Runtime Yol Haritası)**
+- **Detay:** `nox.http.serve_tls` kendi imzalı test sertifikasıyla dinleme açabilse de, macOS ve Windows'ta `std.http.Client` CA doğrulaması için yalnızca işletim sistemi güven deposunu okur (`SSL_CERT_FILE` yok sayılır). Güvenlik ilkesi gereği sertifika doğrulaması kapatılamadığından, yerel bir TLS+QUIC (`Alt-Svc: h3`) sunucusuna karşı platformlar-arası deterministik HTTP/3 loopback testi ancak `nox.http` istemcisine özel bir `ca_bundle` parametresi eklendiğinde çalışabilir.
+- **Nova'daki karşılığı:** HTTP/3 toggle'ı ve HTTP/1.1 şeffaf fallback davranışı test edilmiştir; gerçek protokol seviyesi QUIC/HTTP3 el sıkışma entegrasyon testi v0.8.0 runtime entegrasyonuna planlanmıştır.
 
 ---
 

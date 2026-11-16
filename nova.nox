@@ -204,6 +204,7 @@ def safe_client(
     timeout_ms: int = 15000,
     max_redirects: int = 3,
     ssrf_policy: SSRFPolicy | None = None,
-    resolver: HostResolver | None = None
+    resolver: HostResolver | None = None,
+    require_dns_or_allowlist: bool = False
 ) -> Client:
-    return create_safe_client(base_url, timeout_ms, max_redirects, ssrf_policy, resolver)
+    return create_safe_client(base_url, timeout_ms, max_redirects, ssrf_policy, resolver, require_dns_or_allowlist)

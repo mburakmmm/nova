@@ -45,6 +45,7 @@ class RetryPolicy:
     max_backoff_ms: int
     retry_on_transport_error: bool
     retry_post: bool
+    retry_put_delete: bool
     jitter: str                 # "none" (default), "full" or "equal"
     jitter_sample_permille: int # -1 = random; 0..1000 = deterministic sample (tests)
     jitter_seeded: bool
@@ -55,19 +56,23 @@ class RetryPolicy:
         backoff_factor_ms: int = 100,
         max_backoff_ms: int = 10000,
         retry_on_transport_error: bool = True,
-        retry_post: bool = False
+        retry_post: bool = False,
+        retry_put_delete: bool = True
     ) -> None:
         self.max_retries = max_retries
         self.backoff_factor_ms = backoff_factor_ms
         self.max_backoff_ms = max_backoff_ms
         self.retry_on_transport_error = retry_on_transport_error
         self.retry_post = retry_post
+        self.retry_put_delete = retry_put_delete
         self.jitter = "none"
         self.jitter_sample_permille = -1
         self.jitter_seeded = False
 
     def _is_method_retryable(self: RetryPolicy, method: str) -> bool:
         if method == "GET" or method == "HEAD" or method == "OPTIONS":
+            return True
+        if (method == "PUT" or method == "DELETE") and self.retry_put_delete:
             return True
         if method == "POST" and self.retry_post:
             return True

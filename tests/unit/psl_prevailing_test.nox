@@ -1,0 +1,66 @@
+# tests/unit/psl_prevailing_test.nox — Tests full Mozilla PSL wildcard (`*.ck`), exception (`!www.ck`),
+# prevailing-rule `public_suffix()`, and CookieJar domain acceptance enforcement.
+
+import nox.test
+import psl
+from psl import is_public_suffix, public_suffix
+import cookies
+from cookies import CookieJar
+import headers
+from headers import Headers
+
+# 1. Exact, wildcard, and exception rules from live Mozilla PSL
+nox.test.assert_true(is_public_suffix("ck"), "ck TLD is public suffix")
+nox.test.assert_true(is_public_suffix("a.ck"), "*.ck wildcard marks a.ck as public suffix")
+nox.test.assert_true(is_public_suffix("EXAMPLE.CK."), "wildcard lookup normalizes case and trailing dots")
+nox.test.assert_true(not is_public_suffix("b.a.ck"), "b.a.ck has 3 labels so it is registrable, not public suffix")
+nox.test.assert_true(not is_public_suffix("www.ck"), "!www.ck exception overrides *.ck")
+nox.test.assert_true(not is_public_suffix("sub.www.ck"), "subdomain of exception is not public suffix")
+
+# Multi-level wildcard + exception in official Mozilla PSL (kawasaki.jp)
+nox.test.assert_true(is_public_suffix("app.kawasaki.jp"), "*.kawasaki.jp matches app.kawasaki.jp")
+nox.test.assert_true(not is_public_suffix("city.kawasaki.jp"), "!city.kawasaki.jp overrides *.kawasaki.jp")
+
+# 2. Prevailing effective Public Suffix (eTLD) helper
+nox.test.assert_eq_str(public_suffix("sub.a.ck"), "a.ck", "eTLD of sub.a.ck is a.ck")
+nox.test.assert_eq_str(public_suffix("www.ck"), "ck", "eTLD of !www.ck exception is ck")
+nox.test.assert_eq_str(public_suffix("portal.city.kawasaki.jp"), "kawasaki.jp", "eTLD under !city.kawasaki.jp is kawasaki.jp")
+nox.test.assert_eq_str(public_suffix("api.service.co.uk"), "co.uk", "eTLD under exact co.uk is co.uk")
+
+# 3. CookieJar security: wildcard supercookie rejected, exception host allowed
+jar: CookieJar = CookieJar()
+h_wild: Headers = Headers()
+h_wild.set("Set-Cookie", "super=bad; Domain=a.ck; Path=/")
+jar.extract_from_response("https://victim.a.ck/login", h_wild)
+nox.test.assert_eq_int(jar.len(), 0, "supercookie for wildcard public suffix Domain=a.ck is rejected")
+
+# Host matching the wildcard suffix itself degrades to host-only (never sent to sibling subdomains)
+h_hostonly: Headers = Headers()
+h_hostonly.set("Set-Cookie", "honly=ok; Domain=a.ck; Path=/")
+jar.extract_from_response("https://a.ck/login", h_hostonly)
+nox.test.assert_eq_str(jar.to_cookie_header("https://a.ck/app"), "honly=ok", "exact host a.ck gets host-only cookie")
+nox.test.assert_eq_str(jar.to_cookie_header("https://sub.a.ck/app"), "", "host-only cookie on a.ck does not leak to sub.a.ck")
+
+# Exception !www.ck is registrable, so Domain=www.ck works for both www.ck and sub.www.ck
+jar2: CookieJar = CookieJar()
+h_exc: Headers = Headers()
+h_exc.set("Set-Cookie", "sess=valid; Domain=www.ck; Path=/")
+jar2.extract_from_response("https://sub.www.ck/auth", h_exc)
+nox.test.assert_eq_str(jar2.to_cookie_header("https://other.www.ck/dashboard"), "sess=valid", "!www.ck exception allows Domain=www.ck cookies")
+
+# 4. Runtime custom wildcard & exception rules on CookieJar
+jar3: CookieJar = CookieJar()
+jar3.add_public_suffix("*.corp.internal")
+jar3.add_public_suffix("!gateway.corp.internal")
+
+h_custom_block: Headers = Headers()
+h_custom_block.set("Set-Cookie", "k=v; Domain=team.corp.internal; Path=/")
+jar3.extract_from_response("https://app.team.corp.internal/", h_custom_block)
+nox.test.assert_eq_int(jar3.len(), 0, "runtime wildcard suffix blocks Domain=team.corp.internal")
+
+h_custom_allow: Headers = Headers()
+h_custom_allow.set("Set-Cookie", "k=v; Domain=gateway.corp.internal; Path=/")
+jar3.extract_from_response("https://sub.gateway.corp.internal/", h_custom_allow)
+nox.test.assert_eq_int(jar3.len(), 1, "runtime exception overrides runtime wildcard")
+
+print("psl_prevailing_test passed")

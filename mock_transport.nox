@@ -18,6 +18,7 @@ from errors import TransportError, UnsupportedFeatureError, EncodeError
 
 class MockTransport(Transport):
     requests: list[Request]
+    streams: list[StreamResponse]
     uploads: list[UploadStream]
     queue: list[Response]
     queue_errors: list[str]
@@ -27,6 +28,7 @@ class MockTransport(Transport):
 
     def __init__(self: MockTransport) -> None:
         self.requests = []
+        self.streams = []
         self.uploads = []
         self.queue = []
         self.queue_errors = []
@@ -101,7 +103,11 @@ class MockTransport(Transport):
 
     def stream(self: MockTransport, req: Request) -> StreamResponse:
         r: Response = self._next(req)
-        return StreamResponse(r.status_code, r.headers, req.url, req.method, r.body, None)
+        sr: StreamResponse = StreamResponse(r.status_code, r.headers, req.url, req.method, r.body, None)
+        srec: list[StreamResponse] = self.streams
+        srec.append(sr)
+        self.streams = srec
+        return sr
 
     def stream_upload(self: MockTransport, req: Request, content_length: int = -1) -> UploadStream:
         if content_length < -1:

@@ -339,6 +339,7 @@ class SSRFPolicy:
     allow_link_local: bool
     strict_hostnames: bool
     skip_dns_for_allowlist: bool
+    require_dns_or_allowlist: bool
     blocked_hosts: list[str]
     allowed_hosts: list[str]
     resolver: HostResolver | None
@@ -354,6 +355,7 @@ class SSRFPolicy:
         self.allow_link_local = allow_link_local
         self.strict_hostnames = False
         self.skip_dns_for_allowlist = False
+        self.require_dns_or_allowlist = False
         self.blocked_hosts = []
         self.allowed_hosts = []
         self.resolver = None
@@ -387,6 +389,12 @@ class SSRFPolicy:
     # Set to True only when allowlisted hosts intentionally point to private internal IPs.
     def set_skip_dns_for_allowlist(self: SSRFPolicy, skip: bool = True) -> SSRFPolicy:
         self.skip_dns_for_allowlist = skip
+        return self
+
+    # Fail-closed guard when no HostResolver is attached: rejects arbitrary unverified hostnames
+    # unless explicitly allowlisted or resolved via a HostResolver.
+    def set_require_dns_or_allowlist(self: SSRFPolicy, enabled: bool = True) -> SSRFPolicy:
+        self.require_dns_or_allowlist = enabled
         return self
 
     def is_host_allowed_explicitly(self: SSRFPolicy, host_lower: str) -> bool:
@@ -472,8 +480,10 @@ class SSRFPolicy:
         if self.strict_hostnames:
             raise SSRFSecurityError(target_url, raw_host, "Hostname not in allowlist (strict SSRF mode): " + raw_host)
 
-        # 6. Hostname: post-DNS validation when a resolver is configured
+        # 6. Hostname: post-DNS validation when a resolver is configured (or fail-closed when required)
         r: HostResolver | None = self.resolver
         if r is not None:
             ips: list[str] = r.resolve(host_lower)
             self.validate_resolved(target_url, raw_host, ips)
+        elif self.require_dns_or_allowlist:
+            raise SSRFSecurityError(target_url, raw_host, "Hostname blocked: SSRFPolicy requires a HostResolver or explicit allowlist (fail-closed mode)")

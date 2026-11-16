@@ -5,6 +5,23 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-11-16
+
+### Security & Correctness Hardening (external audit of v0.7.0)
+- **Full Mozilla PSL Prevailing-Rule Engine (P0 — `psl.nox`, `cookies.nox`, `scripts/update_psl.py`)**:
+  - Updated `scripts/update_psl.py` to stop skipping `*` and `!` entries and emit exact (`8,692`), wildcard (`314` `*.X`), and exception (`8` `!Y`) rule tables into `psl.nox`.
+  - Implemented Mozilla PSL prevailing-rule evaluation (`!` exception > exact / `*.` wildcard > implicit `*` single-label fallback), `psl.public_suffix()` (eTLD lookup), and runtime wildcard/exception support in `CookieJar.add_public_suffix()`.
+- **SSRF DNS Fail-Closed Boundary Option (P0 — `ssrf.nox`, `client.nox`, `nova.nox`)**:
+  - Added `SSRFPolicy.set_require_dns_or_allowlist()` and `create_safe_client(..., require_dns_or_allowlist=False)` / `nova.safe_client(...)` so resolver-free deployments can fail closed on unverified public hostnames while runtime IP-pinning remains tracked in `NOX_LIMITATIONS.md` §14.
+- **Streaming Lifecycle Cleanup & `CookieJar`/`ContentDecoder` Sync (P1 — `stream.nox`, `client.nox`, `mock_transport.nox`)**:
+  - `Client.stream()` now closes opened `StreamResponse` instances deterministically if `raise_for_status()` throws or if cookie/redirect handling fails.
+  - `UploadStream.finish()` / `finish_stream()` now synchronize `Set-Cookie` headers into `Client.cookies`, decode responses via `Client.content_decoder`, and guarantee stream closure on every error path.
+- **Unified Stream Pipeline & Idempotent `PUT`/`DELETE` Retries (P2 — `client.nox`, `retry.nox`)**:
+  - Unified `Client.stream()` with `Client.send()`'s redirect-following, cross-origin credential/Cookie stripping, SSRF redirect checks, and `RetryPolicy` loops (closing intermediate streams cleanly before each hop/retry).
+  - Updated `RetryPolicy` to include RFC 9110 idempotent `PUT` and `DELETE` methods by default (`retry_put_delete: bool = True`).
+- **Honest HTTP/3 Documentation (`NOX_LIMITATIONS.md` §22, `docs/transport-capabilities.md`)**: Clarified that protocol-level QUIC loopback tests wait on custom-CA trust support in `nox.http` (`v0.8.0`), while toggle and TCP fallback behavior are verified.
+- **Tests**: Added `psl_prevailing_test.nox`, `stream_lifecycle_pipeline_test.nox`, and `ssrf_dns_boundary_test.nox` (`41` total tests). Default `User-Agent` updated to `Nova/0.7.1`.
+
 ## [0.7.0] - 2026-11-15
 
 ### Added — Nox v2.1.186 Integrations, Protected WASM/Mobile Fallback & Cross-Platform CI

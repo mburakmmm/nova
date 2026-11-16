@@ -83,7 +83,7 @@ class Client:
     ) -> None:
         self.base_url = base_url
         self.default_headers = Headers()
-        self.default_headers.set("User-Agent", "Nova/0.7.0")
+        self.default_headers.set("User-Agent", "Nova/0.7.1")
         self.default_headers.set("Accept", "*/*")
         self.basic_auth = None
         self.bearer_auth = None
@@ -169,6 +169,103 @@ class Client:
         self.advertise_decoder_encoding = advertise_accept_encoding
         return self
 
+    def _prepare_request(
+        self: Client,
+        method: str,
+        url_or_path: str,
+        payload: str,
+        content_type_default: str,
+        params: dict[str, str] | None,
+        headers: dict[str, str] | None,
+        timeout_ms: int
+    ) -> Request:
+        full_url: str = resolve_url(self.base_url, url_or_path, params)
+
+        req_headers: Headers = self.default_headers.clone()
+        if headers is not None:
+            req_headers.merge_dict(headers)
+
+        b_auth: BasicAuth | None = self.basic_auth
+        if b_auth is not None:
+            b_auth.apply(req_headers)
+
+        tok_auth: BearerAuth | None = self.bearer_auth
+        if tok_auth is not None:
+            tok_auth.apply(req_headers)
+
+        jar: CookieJar | None = self.cookies
+        if jar is not None:
+            jar.apply_to_request(full_url, req_headers)
+
+        dec: ContentDecoder | None = self.content_decoder
+        if dec is not None and self.advertise_decoder_encoding:
+            if not req_headers.has("Accept-Encoding"):
+                enc_hdr: str = dec.accept_encoding()
+                if len(enc_hdr) > 0:
+                    req_headers.set("Accept-Encoding", enc_hdr)
+
+        if len(content_type_default) > 0 and not req_headers.has("Content-Type"):
+            req_headers.set("Content-Type", content_type_default)
+
+        eff_timeout: int = self.timeout_ms
+        if timeout_ms >= 0:
+            eff_timeout = timeout_ms
+
+        return Request(method, full_url, req_headers, payload, eff_timeout)
+
+    def _compute_retry_delay_ms(self: Client, pol: RetryPolicy, attempt: int, resp_headers: Headers) -> int:
+        delay: int = pol.next_delay_ms(attempt)
+        # Respect Retry-After header if present (AGENTS.md §13): delta-seconds or HTTP-date
+        retry_after_str: str = resp_headers.get("Retry-After", "")
+        if len(retry_after_str) > 0:
+            ra_ms: int = parse_retry_after_ms(retry_after_str, nox.time.now_ms() // 1000)
+            if ra_ms > 0:
+                delay = ra_ms
+        # Cap delay to max_backoff_ms to prevent sleep DoS
+        if delay > pol.max_backoff_ms:
+            delay = pol.max_backoff_ms
+        return delay
+
+    def _build_redirect_request(
+        self: Client,
+        current_req: Request,
+        status_code: int,
+        resp_headers: Headers,
+        s_pol: SSRFPolicy | None
+    ) -> Request:
+        loc: str = resp_headers.get("Location")
+        next_url: str = resolve_url(current_req.url, loc)
+
+        # Validate SSRF defense policy on redirect target (prevents open-redirect SSRF bypasses)
+        if s_pol is not None:
+            s_pol.validate_target(next_url)
+
+        same_origin: bool = is_same_origin(current_req.url, next_url)
+        next_headers: Headers = current_req.headers.clone()
+
+        # SECURITY CRITICAL (AGENTS.md §10 & §11):
+        # Strip Authorization, Proxy-Authorization, and Cookie on cross-origin redirects
+        if not same_origin:
+            next_headers.delete("Authorization")
+            next_headers.delete("Proxy-Authorization")
+            next_headers.delete("Cookie")
+
+        # Handle 303 See Other or 301/302 POST -> GET
+        next_method: str = current_req.method
+        next_body: str = current_req.body
+        if status_code == 303 or ((status_code == 301 or status_code == 302) and current_req.method == "POST"):
+            next_method = "GET"
+            next_body = ""
+            next_headers.delete("Content-Type")
+
+        # Apply cookies for new URL destination
+        jar2: CookieJar | None = self.cookies
+        if jar2 is not None:
+            next_headers.delete("Cookie")
+            jar2.apply_to_request(next_url, next_headers)
+
+        return Request(next_method, next_url, next_headers, next_body, current_req.timeout_ms)
+
     def send(self: Client, req: Request) -> Response:
         # Validate SSRF defense policy on initial request target
         s_pol: SSRFPolicy | None = self.ssrf_policy
@@ -189,26 +286,14 @@ class Client:
                     r: Response = self.transport.execute(current_req)
                     res = r
 
-                    # Cookie extraction if cookie jar enabled
                     jar: CookieJar | None = self.cookies
                     if jar is not None:
                         jar.extract_from_response(current_req.url, r.headers)
 
-                    # Check if response status should be retried
                     if pol is not None:
                         if pol.should_retry_status(current_req.method, attempt, r.status_code):
                             attempt = attempt + 1
-                            delay: int = pol.next_delay_ms(attempt)
-                            # Respect Retry-After header if present (AGENTS.md §13): delta-seconds or HTTP-date
-                            retry_after_str: str = r.headers.get("Retry-After", "")
-                            if len(retry_after_str) > 0:
-                                ra_ms: int = parse_retry_after_ms(retry_after_str, nox.time.now_ms() // 1000)
-                                if ra_ms > 0:
-                                    delay = ra_ms
-                            # Cap delay to max_backoff_ms to prevent sleep DoS
-                            if delay > pol.max_backoff_ms:
-                                delay = pol.max_backoff_ms
-                            nox.time.sleep_ms(delay)
+                            nox.time.sleep_ms(self._compute_retry_delay_ms(pol, attempt, r.headers))
                             continue
                     break
                 except TransportError as te:
@@ -216,8 +301,7 @@ class Client:
                     if pol is not None:
                         if pol.should_retry_error(current_req.method, attempt):
                             attempt = attempt + 1
-                            delay: int = pol.next_delay_ms(attempt)
-                            nox.time.sleep_ms(delay)
+                            nox.time.sleep_ms(pol.next_delay_ms(attempt))
                             continue
                     raise te
 
@@ -227,41 +311,8 @@ class Client:
                 if self.max_redirects > 0 and final_res.is_redirect() and final_res.headers.has("Location"):
                     if redirect_count >= self.max_redirects:
                         raise TransportError("Too many redirects: exceeded maximum of " + str(self.max_redirects))
-
                     redirect_count = redirect_count + 1
-                    loc: str = final_res.headers.get("Location")
-                    next_url: str = resolve_url(current_req.url, loc)
-
-                    # Validate SSRF defense policy on redirect target (prevents open-redirect SSRF bypasses)
-                    if s_pol is not None:
-                        s_pol.validate_target(next_url)
-
-                    same_origin: bool = is_same_origin(current_req.url, next_url)
-                    next_headers: Headers = current_req.headers.clone()
-
-                    # SECURITY CRITICAL (AGENTS.md §10 & §11):
-                    # Strip Authorization and Proxy-Authorization on cross-origin redirects
-                    if not same_origin:
-                        next_headers.delete("Authorization")
-                        next_headers.delete("Proxy-Authorization")
-                        # Manually configured Cookie headers must never cross origins either.
-                        next_headers.delete("Cookie")
-
-                    # Handle 303 See Other or 301/302 POST -> GET
-                    next_method: str = current_req.method
-                    next_body: str = current_req.body
-                    if final_res.status_code == 303 or ((final_res.status_code == 301 or final_res.status_code == 302) and current_req.method == "POST"):
-                        next_method = "GET"
-                        next_body = ""
-                        next_headers.delete("Content-Type")
-
-                    # Apply cookies for new URL destination
-                    jar2: CookieJar | None = self.cookies
-                    if jar2 is not None:
-                        next_headers.delete("Cookie")
-                        jar2.apply_to_request(next_url, next_headers)
-
-                    current_req = Request(next_method, next_url, next_headers, next_body, current_req.timeout_ms)
+                    current_req = self._build_redirect_request(current_req, final_res.status_code, final_res.headers, s_pol)
                     continue
 
                 dec: ContentDecoder | None = self.content_decoder
@@ -285,47 +336,12 @@ class Client:
         headers: dict[str, str] | None = None,
         timeout_ms: int = -1
     ) -> Response:
-        full_url: str = resolve_url(self.base_url, url_or_path, params)
-
-        # Merge headers: client defaults -> caller overrides
-        req_headers: Headers = self.default_headers.clone()
-        if headers is not None:
-            req_headers.merge_dict(headers)
-
-        # Apply authentication
-        b_auth: BasicAuth | None = self.basic_auth
-        if b_auth is not None:
-            b_auth.apply(req_headers)
-
-        tok_auth: BearerAuth | None = self.bearer_auth
-        if tok_auth is not None:
-            tok_auth.apply(req_headers)
-
-        # Apply cookies
-        jar: CookieJar | None = self.cookies
-        if jar is not None:
-            jar.apply_to_request(full_url, req_headers)
-
-        # Optional decoder negotiation
-        dec: ContentDecoder | None = self.content_decoder
-        if dec is not None and self.advertise_decoder_encoding:
-            if not req_headers.has("Accept-Encoding"):
-                enc_hdr: str = dec.accept_encoding()
-                if len(enc_hdr) > 0:
-                    req_headers.set("Accept-Encoding", enc_hdr)
-
-        # Handle JSON body
         payload: str = body
+        ct: str = ""
         if len(json) > 0:
             payload = json
-            if not req_headers.has("Content-Type"):
-                req_headers.set("Content-Type", "application/json")
-
-        eff_timeout: int = self.timeout_ms
-        if timeout_ms >= 0:
-            eff_timeout = timeout_ms
-
-        req: Request = Request(method, full_url, req_headers, payload, eff_timeout)
+            ct = "application/json"
+        req: Request = self._prepare_request(method, url_or_path, payload, ct, params, headers, timeout_ms)
         return self.send(req)
 
     def get(
@@ -437,6 +453,7 @@ class Client:
     ) -> Response:
         return self.request("OPTIONS", url, "", "", params, headers, timeout_ms)
 
+    # Streaming download pipeline: shares SSRF, retry, redirect, CookieJar, and cleanup semantics with send().
     def stream(
         self: Client,
         method: str,
@@ -446,42 +463,75 @@ class Client:
         headers: dict[str, str] | None = None,
         timeout_ms: int = -1
     ) -> StreamResponse:
-        full_url: str = resolve_url(self.base_url, url, params)
+        current_req: Request = self._prepare_request(method, url, body, "", params, headers, timeout_ms)
 
         s_pol: SSRFPolicy | None = self.ssrf_policy
         if s_pol is not None:
-            s_pol.validate_target(full_url)
+            s_pol.validate_target(current_req.url)
 
-        req_headers: Headers = self.default_headers.clone()
-        if headers is not None:
-            req_headers.merge_dict(headers)
+        pol: RetryPolicy | None = self.retry_policy
+        redirect_count: int = 0
+        attempt: int = 0
+        last_error_msg: str = ""
 
-        b_auth: BasicAuth | None = self.basic_auth
-        if b_auth is not None:
-            b_auth.apply(req_headers)
+        while True:
+            opened: StreamResponse | None = None
 
-        tok_auth: BearerAuth | None = self.bearer_auth
-        if tok_auth is not None:
-            tok_auth.apply(req_headers)
+            while True:
+                try:
+                    s_resp: StreamResponse = self.transport.stream(current_req)
+                    try:
+                        jar: CookieJar | None = self.cookies
+                        if jar is not None:
+                            jar.extract_from_response(current_req.url, s_resp.headers)
+                    except Exception as jar_err:
+                        s_resp.close()
+                        raise jar_err
 
-        jar: CookieJar | None = self.cookies
-        if jar is not None:
-            jar.apply_to_request(full_url, req_headers)
+                    if pol is not None:
+                        if pol.should_retry_status(current_req.method, attempt, s_resp.status_code):
+                            retry_delay: int = self._compute_retry_delay_ms(pol, attempt + 1, s_resp.headers)
+                            s_resp.close()
+                            attempt = attempt + 1
+                            nox.time.sleep_ms(retry_delay)
+                            continue
+                    opened = s_resp
+                    break
+                except TransportError as te:
+                    last_error_msg = str(te)
+                    if pol is not None:
+                        if pol.should_retry_error(current_req.method, attempt):
+                            attempt = attempt + 1
+                            nox.time.sleep_ms(pol.next_delay_ms(attempt))
+                            continue
+                    raise te
 
-        eff_timeout: int = self.timeout_ms
-        if timeout_ms >= 0:
-            eff_timeout = timeout_ms
+            if opened is not None:
+                final_stream: StreamResponse = opened
+                is_redir: bool = (final_stream.status_code >= 300 and final_stream.status_code <= 399)
+                if self.max_redirects > 0 and is_redir and final_stream.headers.has("Location"):
+                    try:
+                        if redirect_count >= self.max_redirects:
+                            raise TransportError("Too many redirects: exceeded maximum of " + str(self.max_redirects))
+                        redirect_count = redirect_count + 1
+                        next_req: Request = self._build_redirect_request(current_req, final_stream.status_code, final_stream.headers, s_pol)
+                        final_stream.close()
+                        current_req = next_req
+                        continue
+                    except Exception as redir_err:
+                        final_stream.close()
+                        raise redir_err
 
-        req: Request = Request(method, full_url, req_headers, body, eff_timeout)
-        s_resp: StreamResponse = self.transport.stream(req)
+                if self.raise_on_status:
+                    try:
+                        final_stream.raise_for_status()
+                    except Exception as status_err:
+                        final_stream.close()
+                        raise status_err
 
-        if jar is not None:
-            jar.extract_from_response(full_url, s_resp.headers)
+                return final_stream
 
-        if self.raise_on_status:
-            s_resp.raise_for_status()
-
-        return s_resp
+        raise RetryExhaustedError(attempt, "Retries exhausted: " + last_error_msg)
 
     # Streaming request body upload (chunked when content_length == -1, fixed-size when >= 0).
     def stream_upload(
@@ -493,54 +543,37 @@ class Client:
         headers: dict[str, str] | None = None,
         timeout_ms: int = -1
     ) -> UploadStream:
-        full_url: str = resolve_url(self.base_url, url, params)
+        req: Request = self._prepare_request(method, url, "", "", params, headers, timeout_ms)
 
         s_pol: SSRFPolicy | None = self.ssrf_policy
         if s_pol is not None:
-            s_pol.validate_target(full_url)
+            s_pol.validate_target(req.url)
 
-        req_headers: Headers = self.default_headers.clone()
-        if headers is not None:
-            req_headers.merge_dict(headers)
-
-        b_auth: BasicAuth | None = self.basic_auth
-        if b_auth is not None:
-            b_auth.apply(req_headers)
-
-        tok_auth: BearerAuth | None = self.bearer_auth
-        if tok_auth is not None:
-            tok_auth.apply(req_headers)
-
-        jar: CookieJar | None = self.cookies
-        if jar is not None:
-            jar.apply_to_request(full_url, req_headers)
-
-        eff_timeout: int = self.timeout_ms
-        if timeout_ms >= 0:
-            eff_timeout = timeout_ms
-
-        req: Request = Request(method, full_url, req_headers, "", eff_timeout)
         up: UploadStream = self.transport.stream_upload(req, content_length)
         up.raise_on_status = self.raise_on_status
+        up.cookie_jar = self.cookies
+        up.content_decoder = self.content_decoder
         return up
 
 # Factory for pre-hardened, defense-in-depth clients (e.g. for fetching user-supplied URLs).
 # Enables default SSRF blocking, sets 15s timeout, limits redirects to 3, and enables raise_for_status.
 # If `resolver` is supplied, it is attached to the SSRFPolicy to validate all resolved IP addresses.
-# Note: Without a resolver, hostnames are screened for localhost and cloud metadata, but arbitrary
-# hostnames that dynamically resolve to private IPs require a HostResolver or strict_hostnames=True.
+# Pass `require_dns_or_allowlist=True` to reject unverified public hostnames when no resolver is configured.
 def create_safe_client(
     base_url: str = "",
     timeout_ms: int = 15000,
     max_redirects: int = 3,
     ssrf_policy: SSRFPolicy | None = None,
-    resolver: HostResolver | None = None
+    resolver: HostResolver | None = None,
+    require_dns_or_allowlist: bool = False
 ) -> Client:
     p: SSRFPolicy = SSRFPolicy()
     if ssrf_policy is not None:
         p = ssrf_policy
     if resolver is not None:
         p.set_resolver(resolver)
+    if require_dns_or_allowlist:
+        p.set_require_dns_or_allowlist(True)
     c: Client = Client(
         base_url=base_url,
         raise_for_status=True,
