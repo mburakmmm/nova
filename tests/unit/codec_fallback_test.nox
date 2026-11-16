@@ -1,0 +1,65 @@
+# tests/unit/codec_fallback_test.nox — Pure-Nox ContentDecoder & FallbackContentDecoder tests (WASM/mobile safe).
+
+import nox.test
+import codec
+from codec import ContentDecoder, FallbackContentDecoder, normalize_encoding, decode_response_with
+import response
+from response import Response
+import headers
+from headers import Headers
+import errors
+from errors import UnsupportedFeatureError
+import client
+from client import Client
+import mock_transport
+from mock_transport import MockTransport
+
+# 1. Normalization & capabilities
+nox.test.assert_eq_str(normalize_encoding("  BR "), "br", "normalize_encoding lowercases and trims")
+fb: FallbackContentDecoder = FallbackContentDecoder()
+nox.test.assert_eq_str(fb.backend(), "pure-nox-fallback", "fallback backend name")
+nox.test.assert_true(not fb.supports_brotli(), "fallback must not claim brotli support")
+nox.test.assert_true(fb.supports("identity"), "fallback supports identity")
+nox.test.assert_true(fb.supports(""), "fallback supports empty encoding")
+nox.test.assert_true(not fb.supports("br"), "fallback does not support br")
+nox.test.assert_eq_str(fb.accept_encoding(), "gzip, deflate", "fallback accept_encoding excludes br")
+
+# 2. Identity passthrough & explicit failure on br
+nox.test.assert_eq_str(fb.decode("identity", "hello"), "hello", "identity returns payload unchanged")
+nox.test.assert_eq_str(fb.decode("", "hello"), "hello", "empty encoding returns payload unchanged")
+
+br_rejected: bool = False
+try:
+    _bad: str = fb.decode("br", "compressed-bytes")
+except UnsupportedFeatureError as e:
+    br_rejected = True
+    nox.test.assert_eq_str(e.feature, "brotli", "UnsupportedFeatureError feature is brotli")
+nox.test.assert_true(br_rejected, "FallbackContentDecoder rejects br explicitly")
+
+# 3. decode_response_with respects transport-decoded gzip/deflate while catching br
+h_gzip: Headers = Headers()
+h_gzip.set("Content-Encoding", "gzip")
+r_gzip: Response = Response(200, "already-decompressed", h_gzip, "https://example.com", "GET", 1)
+r_gzip_dec: Response = decode_response_with(r_gzip, fb, True)
+nox.test.assert_eq_str(r_gzip_dec.body, "already-decompressed", "transport-decoded gzip passes through cleanly")
+
+# 4. Client + MockTransport + FallbackContentDecoder integration
+mt: MockTransport = MockTransport()
+mt.add_response(200, "plain-ok", {"Content-Encoding": "gzip"})
+mt.add_response(200, "raw-br-bytes", {"Content-Encoding": "br"})
+
+cli: Client = Client("https://api.example.com")
+cli.set_transport(mt)
+cli.set_content_decoder(fb)
+
+ok_res: Response = cli.get("/gzip")
+nox.test.assert_eq_str(ok_res.body, "plain-ok", "Client passes transport-decoded gzip body cleanly")
+
+cli_br_failed: bool = False
+try:
+    _br_res: Response = cli.get("/br")
+except UnsupportedFeatureError:
+    cli_br_failed = True
+nox.test.assert_true(cli_br_failed, "Client with FallbackContentDecoder rejects unhandled br response")
+
+print("codec_fallback_test passed")

@@ -14,22 +14,69 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
 
     steps:
       - name: Checkout Nova
         uses: actions/checkout@v4
 
-      - name: Install Nox
+      - name: Install Nox (Unix)
+        if: runner.os != 'Windows'
         env:
-          NOX_VERSION: v2.1.64
+          NOX_VERSION: v2.1.186
         run: |
           curl -fsSL https://noxlang.com/install.sh | bash
           echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
 
+      - name: Install Nox & OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          NOX_VERSION: v2.1.186
+        run: |
+          $ErrorActionPreference = "Stop"
+          irm "https://raw.githubusercontent.com/mburakmmm/nox-lang/$env:NOX_VERSION/install.ps1" | iex
+          $NoxBin = Join-Path $env:USERPROFILE ".nox-lang\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value $NoxBin
+
+          $ErrorActionPreference = "Continue"
+          choco install openssl.light -y --no-progress
+          $ErrorActionPreference = "Stop"
+          $roots = @("C:\Program Files\OpenSSL", "C:\Program Files\OpenSSL-Win64", "C:\ProgramData\chocolatey\lib\openssl.light")
+          $dll = $null
+          foreach ($root in $roots) {
+            if (Test-Path $root) {
+              $dll = Get-ChildItem -Path $root -Filter "libssl-*.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($dll) { break }
+            }
+          }
+          if ($dll) {
+            Add-Content -Path $env:GITHUB_ENV -Value "NOX_OPENSSL_LIB=$($dll.FullName)"
+            Add-Content -Path $env:GITHUB_PATH -Value $dll.DirectoryName
+          }
+
       - name: Verify Nox Toolchain
         run: |
           noxc version
+
+      - name: Verify Pure-Nox Core on WASM & Mobile Targets
+        run: |
+          noxc check --target wasm32-wasi nova.nox
+          noxc check --target wasm32-freestanding nova.nox
+          noxc check --target ios-arm64 nova.nox
+          noxc check --target android-arm64 nova.nox
+          noxc check --target wasm32-wasi tests/unit/codec_fallback_test.nox
+
+      - name: Generate & Verify CycloneDX 1.5 SBOM
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          noxc sbom . -o sbom.generated.cdx.json
+          $gen = Get-Content sbom.generated.cdx.json -Raw | ConvertFrom-Json
+          if ($gen.bomFormat -ne "CycloneDX" -or $gen.specVersion -ne "1.5") {
+            throw "Invalid generated SBOM metadata"
+          }
+          Remove-Item sbom.generated.cdx.json
 
       - name: Run Nova Test Suite
         run: |

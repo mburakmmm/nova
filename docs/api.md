@@ -211,5 +211,26 @@ from nova import RetryPolicy
 - `set_jitter(mode: str)` (`"none"`, `"full"`, `"equal"`), `next_delay_ms(attempt)`, `jittered_delay_ms(attempt, sample_permille)`; `parse_retry_after_ms(value, now_s)`.
 
 ### Transport injection
-- `Transport` (base), `TransportAdapter` (nox.http), `MockTransport` (`add_response`, `add_error`, `route`, `requests`), `Client.set_transport(t)`.
+- `Transport` (base), `TransportAdapter` (nox.http), `MockTransport` (`add_response`, `add_error`, `route`, `requests`, `uploads`, `last_upload`), `Client.set_transport(t)`.
 - `Client.connection_pool_scope() -> str` — always `"process"`.
+
+---
+
+## v0.7.0 additions
+
+### HTTP/3 (QUIC / Alt-Svc)
+- `Client.set_http3(enabled: bool) -> Client`, `nova.set_http3(enabled: bool) -> None` — enables process-wide Alt-Svc HTTP/3 discovery for HTTPS requests (transparent TCP fallback if UDP/OpenSSL 3.5 unavailable).
+- `Client.http3_scope() -> str` — returns `"process"`.
+
+### Streaming Request Uploads (`UploadStream`)
+- `Client.stream_upload(method, url, content_length=-1, params=None, headers=None, timeout_ms=-1) -> UploadStream`
+- `nova.stream_upload(method, url_target, content_length=-1, params=None, headers_dict=None, timeout_ms=-1) -> UploadStream`
+- `UploadStream`: `write(chunk: str)`, `write_bytes(buf: Buffer)`, `finish() -> Response`, `finish_stream() -> StreamResponse`, `close()`, `with ... as up:` context manager, `bytes_sent: int`. Validates `POST`/`PUT`/`PATCH` methods and exact fixed `content_length` bounds (`EncodeError`).
+
+### Protected Cross-Platform Content Codecs (`codec.nox` + Desktop `brotli_codec.nox`)
+- Pure-Nox Core (desktop, WASM, iOS, Android): `ContentDecoder`, `FallbackContentDecoder`, `decode_response_with(resp, decoder, from_nox_http_transport=True)`, `Client.set_content_decoder(decoder, advertise_accept_encoding=False)`.
+- Opt-in Desktop (`nox.brotli`, `noxclibs.a`): `brotli_codec.BrotliDecoder(max_output_bytes=67108864)`, `brotli_codec.decompress_brotli(data, max_output_bytes)`, `brotli_codec.decompress_response(resp)`, `brotli_codec.is_brotli_supported()`.
+
+### Unified Fast JSON Adapter (`json_adapter.nox` + Desktop `yyjson_adapter.nox`)
+- Pure-Nox Core (desktop, WASM, iOS, Android): `JsonDocument`, `NoxJsonDocument`, `JsonReader`, `NoxJsonReader` (`parse`, `parse_response`, `get`, `get_str`, `get_int`, `get_float`, `get_bool`, `has`, `array_len`, `array_get`, `dump`, `dump_pretty`).
+- Opt-in Desktop (`nox.yyjson`, `noxclibs.a`): `yyjson_adapter.YyJsonDocument`, `yyjson_adapter.YyJsonReader(relaxed=False, json5=False)`, `yyjson_adapter.parse_yyjson(raw, relaxed, json5)`, `yyjson_adapter.parse_yyjson_response(resp, relaxed, json5)`, `yyjson_adapter.is_yyjson_supported()`.

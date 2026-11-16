@@ -8,13 +8,18 @@ from request import Request
 import response
 from response import Response
 import stream
-from stream import StreamResponse
+from stream import StreamResponse, UploadStream
 import headers
 from headers import Headers, headers_from_dict, response_headers_from_dict
 import errors
-from errors import TransportError, TimeoutError, UnsupportedFeatureError
+from errors import TransportError, TimeoutError, UnsupportedFeatureError, EncodeError
 import url
 from url import sanitize_url
+
+HTTP3_SCOPE: str = "process"
+
+def configure_http3(enabled: bool) -> None:
+    nox.http.set_http3(enabled)
 
 # Abstract transport. Client depends on this interface (dependency injection), so tests
 # and alternative transports can replace the nox.http-backed TransportAdapter.
@@ -24,6 +29,9 @@ class Transport:
 
     def stream(self: Transport, req: Request) -> StreamResponse:
         raise UnsupportedFeatureError(req.method, "Transport.stream is not implemented")
+
+    def stream_upload(self: Transport, req: Request, content_length: int = -1) -> UploadStream:
+        raise UnsupportedFeatureError(req.method, "Transport.stream_upload is not implemented")
 
 class TransportAdapter(Transport):
     def __init__(self: TransportAdapter) -> None:
@@ -67,3 +75,25 @@ class TransportAdapter(Transport):
                 raise TransportError(method + " stream failed for " + sanitize_url(target_url) + ": " + str(e))
 
         raise UnsupportedFeatureError(method, "Unrecognized HTTP method: " + method)
+
+    def stream_upload(self: TransportAdapter, req: Request, content_length: int = -1) -> UploadStream:
+        method: str = req.method
+        target_url: str = req.url
+        raw_headers: dict[str, str] = req.headers.to_dict()
+
+        if content_length < -1:
+            raise EncodeError("content_length must be -1 (chunked) or >= 0")
+
+        if method == "POST" or method == "PUT" or method == "PATCH":
+            try:
+                t_ms: int = req.timeout_ms
+                if t_ms < 0:
+                    t_ms = 0
+                s: HttpStream = nox.http.stream_upload(method, target_url, raw_headers, content_length, t_ms)
+                return UploadStream(target_url, method, content_length, s)
+            except HttpTimeoutError as te:
+                raise TimeoutError("Upload stream open timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te))
+            except HttpError as e:
+                raise TransportError(method + " stream_upload failed for " + sanitize_url(target_url) + ": " + str(e))
+
+        raise UnsupportedFeatureError(method, "Streaming upload requires POST, PUT, or PATCH; got: " + method)

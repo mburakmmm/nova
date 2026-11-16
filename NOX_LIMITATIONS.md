@@ -184,6 +184,20 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
 
 ---
 
+## 20. C-Tabanlı `noxclibs.a` Modülleri ve WASM / Mobil Hedef Sınırı (`nox.brotli`, `nox.yyjson`)
+- **Durum:** ✅ **KORUMALI MİMARİ İLE AYRILDI (Nox v2.1.173–2.1.186 / Nova v0.7.0)**
+- **Detay:** Nox `v2.1.173+` masaüstü hedeflerde (macOS/Linux/Windows) `nox.brotli` ve `nox.yyjson` modüllerini `noxclibs.a` ile sunar; ancak derleyici `ios-*`/`android-*` hedeflerinde bu modüllerin `import` edilmesini tip kontrolünde reddeder ve `wasm32-*` hedeflerinde bağlama hatası verir. Ayrıca `http_client.zig` yanıtları yalnızca `gzip`/`deflate` olarak otomatik açar (`br` desteklemez).
+- **Nova'daki karşılığı (v0.7.0):** Çekirdek `nova.nox` ve `Client`, saf Nox (`nox.json` / `FallbackContentDecoder` / `NoxJsonReader`) ile %100 WASM + mobil uyumlu kalır. Brotli (`brotli_codec.nox`) ve yyjson (`yyjson_adapter.nox`) yalnızca masaüstü uygulamaların isteğe bağlı import edebileceği eklenti modülleri olarak ayrılmıştır.
+
+---
+
+## 21. Akışlı Yükleme (`stream_upload`) ve HTTP/3 (`set_http3`) Desteği
+- **Durum:** ✅ **ÇÖZÜLDÜ (Nox v2.1.116 & v2.0.152 / Nova v0.7.0)**
+- **Detay:** `nox.http.stream_upload()` chunked ve sabit boyutlu artımlı yükleme sağlar; `nox.http.set_http3(true)` ise `Alt-Svc: h3` keşfiyle süreç-geneli HTTP/3 desteği açar (UDP/OpenSSL 3.5 yoksa şeffaf TCP geri dönüşü).
+- **Nova'daki karşılığı (v0.7.0):** `Client.stream_upload()`, `UploadStream`, `Client.set_http3()` ve `nova.set_http3()` ile entegre edildi.
+
+---
+
 ## 📊 Çözüm Matrisi Özeti
 
 | Kısıtlama / Özellik | İlgili Nox Sürümü | Durum | Nova'daki Karşılığı |
@@ -197,9 +211,12 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
 | HEAD Keep-Alive Kilitlenmesi | `v2.1.2` | ✅ ÇÖZÜLDÜ | Canlı `HEAD 200` doğrulaması |
 | `spawn` Metot Desteği | `v2.1.5` | ✅ ÇÖZÜLDÜ | `spawn obj.method(...)` & `Task[T]` |
 | Yerel Soket Akışı (Streaming) | `v2.0.69` | ✅ ÇÖZÜLDÜ | `StreamResponse` + `with client.stream()` |
+| Akışlı Yükleme (`stream_upload`) | `v2.0.152` | ✅ ÇÖZÜLDÜ | `UploadStream` + `client.stream_upload()` |
+| HTTP/3 (`Alt-Svc` + TCP fallback) | `v2.1.116` | ✅ ÇÖZÜLDÜ | `client.set_http3()` / `nova.set_http3()` |
 | Bağlantı Havuzu (Connection Pool) | `v2.0.126` | ✅ ÇÖZÜLDÜ | `client.set_connection_pool()` |
 | Proxy Tünelleme | `v2.0.129` | ✅ ÇÖZÜLDÜ | `HTTP_PROXY`, `HTTPS_PROXY` şeffaf tünelleme |
 | Büyük Dosya Transferi | `v2.0.69` | ✅ ÇÖZÜLDÜ | `nova.transfer` (`download_file`/`upload_file`) |
+| `noxclibs` (Brotli / yyjson) WASM+Mobil Sınırı | `v2.1.175` | ✅ KORUMALI | Çekirdek saf Nox fallback + masaüstü opt-in modülleri |
 | FFI Argümanında Heap Geçicisi | — | ⚠️ AÇIK (Workaround var) | Yerel değişkene atama kuralı |
 | DNS çözümleme + IP'ye bağlanma | — | ⚠️ AÇIK (P0) | `HostResolver`, `strict_hostnames` |
 | Tembel iteratör | — | ⚠️ AÇIK | `read_line`, `for_each_line` |

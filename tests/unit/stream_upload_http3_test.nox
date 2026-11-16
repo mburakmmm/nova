@@ -1,0 +1,116 @@
+# tests/unit/stream_upload_http3_test.nox — Unit tests for UploadStream and HTTP/3 configuration.
+
+import nox.test
+import nox.bytes
+import client
+from client import Client
+import stream
+from stream import UploadStream, StreamResponse
+import response
+from response import Response
+import mock_transport
+from mock_transport import MockTransport
+import ssrf
+from ssrf import SSRFPolicy
+import errors
+from errors import EncodeError, TransportError, UnsupportedFeatureError, SSRFSecurityError, HttpStatusError
+
+# 1. HTTP/3 toggle + scope
+cli: Client = Client("https://api.example.com")
+nox.test.assert_eq_str(cli.http3_scope(), "process", "http3 scope is process")
+cli.set_http3(True)
+cli.set_http3(False)
+
+# 2. Chunked streaming upload via MockTransport + User-Agent v0.7.0
+mt: MockTransport = MockTransport()
+mt.add_response(201, "{\"uploaded\":true}", {"Content-Type": "application/json"})
+cli.set_transport(mt)
+cli.set_bearer_auth("tok_stream_123")
+
+body_text: str = ""
+with cli.stream_upload("POST", "/events", -1, {"mode": "chunked"}, {"X-Batch": "b1"}) as up:
+    up.write("{\"a\":1}\n")
+    up.write_bytes(nox.bytes.from_str("{\"b\":2}\n"))
+    nox.test.assert_eq_int(up.bytes_sent, 16, "bytes_sent tracks written chunks")
+    resp: Response = up.finish()
+    nox.test.assert_eq_int(resp.status_code, 201, "upload finish returns response status")
+    nox.test.assert_eq_str(resp.body, "{\"uploaded\":true}", "upload finish reads response body")
+    body_text = up.uploaded_data()
+
+nox.test.assert_eq_str(body_text, "{\"a\":1}\n{\"b\":2}\n", "mock upload captured full body")
+nox.test.assert_eq_str(mt.requests[0].headers.get("User-Agent"), "Nova/0.7.0", "User-Agent updated to Nova/0.7.0")
+nox.test.assert_eq_str(mt.requests[0].headers.get("Authorization"), "Bearer tok_stream_123", "Bearer auth applied to stream_upload")
+nox.test.assert_eq_str(mt.requests[0].url, "https://api.example.com/events?mode=chunked", "query params merged in stream_upload")
+
+# 3. Fixed Content-Length guards (exact match succeeds, overflow/underflow raise EncodeError)
+mt.add_response(200, "fixed-ok")
+up_ok: UploadStream = cli.stream_upload("PUT", "/blob", 5)
+up_ok.write("hello")
+res_ok: StreamResponse = up_ok.finish_stream()
+nox.test.assert_eq_str(res_ok.read_all(), "fixed-ok", "finish_stream returns lazy StreamResponse")
+up_ok.close()
+
+mt.add_response(200, "unused")
+overflow_err: bool = False
+up_over: UploadStream = cli.stream_upload("POST", "/blob", 4)
+try:
+    up_over.write("12345")
+except EncodeError:
+    overflow_err = True
+up_over.close()
+nox.test.assert_true(overflow_err, "overflowing declared content_length raises EncodeError")
+
+mt.add_response(200, "unused")
+underflow_err: bool = False
+up_under: UploadStream = cli.stream_upload("POST", "/blob", 10)
+up_under.write("1234")
+try:
+    _r_u: Response = up_under.finish()
+except EncodeError:
+    underflow_err = True
+up_under.close()
+nox.test.assert_true(underflow_err, "finishing early with fewer bytes than content_length raises EncodeError")
+
+# 4. Invalid method and write-after-finish / SSRF guards
+method_err: bool = False
+try:
+    _bad_m: UploadStream = cli.stream_upload("GET", "/bad")
+except UnsupportedFeatureError:
+    method_err = True
+nox.test.assert_true(method_err, "stream_upload rejects GET method")
+
+mt.add_response(200, "done")
+up_done: UploadStream = cli.stream_upload("PATCH", "/item")
+up_done.write("patch-data")
+_done_r: Response = up_done.finish()
+after_finish_err: bool = False
+try:
+    up_done.write("more")
+except TransportError:
+    after_finish_err = True
+nox.test.assert_true(after_finish_err, "writing after finish raises TransportError")
+
+cli_safe: Client = Client("http://127.0.0.1:8080", True, 5, 0, SSRFPolicy())
+ssrf_err: bool = False
+try:
+    _blocked: UploadStream = cli_safe.stream_upload("POST", "/upload")
+except SSRFSecurityError:
+    ssrf_err = True
+nox.test.assert_true(ssrf_err, "SSRFPolicy protects stream_upload targets")
+
+# 5. raise_for_status propagation on finish()
+mt.add_response(502, "bad gateway")
+cli_raise: Client = Client("https://api.example.com", True)
+cli_raise.set_transport(mt)
+up_err_status: UploadStream = cli_raise.stream_upload("POST", "/fail")
+up_err_status.write("x")
+status_err: bool = False
+try:
+    _res_502: Response = up_err_status.finish()
+except HttpStatusError as he:
+    status_err = True
+    nox.test.assert_eq_int(he.status_code, 502, "raise_for_status propagates status 502 from UploadStream")
+up_err_status.close()
+nox.test.assert_true(status_err, "UploadStream finish enforces Client.raise_on_status")
+
+print("stream_upload_http3_test passed")

@@ -1,7 +1,10 @@
 # benchmarks/bench_nova.nox — Microbenchmarks for Nova HTTP client components.
 
 import nova
-from nova import Client, Headers, SSRFPolicy, resolve_url, MultipartEncoder
+from nova import Client, Headers, SSRFPolicy, resolve_url, MultipartEncoder, JsonReader, NoxJsonReader, JsonDocument
+import psl
+import yyjson_adapter
+from yyjson_adapter import YyJsonReader
 import nox.time
 
 def bench_url_resolution(iterations: int) -> int:
@@ -48,6 +51,27 @@ def bench_multipart_encoding(iterations: int) -> int:
         i = i + 1
     return t0.elapsed_ms()
 
+def bench_psl_lookup(iterations: int) -> int:
+    t0: nox.time.Instant = nox.time.instant_now()
+    i: int = 0
+    while i < iterations:
+        _a: bool = psl.is_public_suffix("co.uk")
+        _b: bool = psl.is_public_suffix("deno.dev")
+        _c: bool = psl.is_public_suffix("app.example.com")
+        i = i + 1
+    return t0.elapsed_ms()
+
+def bench_json_reader(reader: JsonReader, iterations: int) -> int:
+    payload: str = "{\"service\":\"nova\",\"version\":7,\"ok\":true,\"items\":[\"a\",\"b\",\"c\",\"d\"]}"
+    t0: nox.time.Instant = nox.time.instant_now()
+    i: int = 0
+    while i < iterations:
+        doc: JsonDocument = reader.parse(payload)
+        _s: str = doc.get_str("service")
+        _v: int = doc.get_int("version")
+        i = i + 1
+    return t0.elapsed_ms()
+
 print("=== Nova Microbenchmark Suite ===")
 n: int = 10000
 
@@ -62,5 +86,12 @@ print("3. SSRF Policy URL Validation (" + str(n) + " ops): " + str(t_ssrf) + " m
 
 t_mp: int = bench_multipart_encoding(1000)
 print("4. Multipart MIME Framing (1000 builds): " + str(t_mp) + " ms (" + str(float(t_mp) / 1000.0 * 1000.0) + " us/op)")
+
+t_psl: int = bench_psl_lookup(n)
+print("5. O(1) Public Suffix Lookups (" + str(n * 3) + " checks): " + str(t_psl) + " ms (" + str(float(t_psl) / float(n * 3) * 1000.0) + " us/op)")
+
+t_nox_json: int = bench_json_reader(NoxJsonReader(), 20000)
+t_yy_json: int = bench_json_reader(YyJsonReader(), 20000)
+print("6. JSON Parse+Read (20000 ops): nox.json=" + str(t_nox_json) + " ms, nox.yyjson=" + str(t_yy_json) + " ms")
 
 print("=== Benchmark Finished Successfully ===")

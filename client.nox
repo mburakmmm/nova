@@ -19,13 +19,15 @@ from response import Response
 import request
 from request import Request
 import transport
-from transport import Transport, TransportAdapter
+from transport import Transport, TransportAdapter, configure_http3, HTTP3_SCOPE
+import codec
+from codec import ContentDecoder, decode_response_with
 import multipart
 from multipart import MultipartEncoder, MultipartFile, file_from_path
 import ssrf
 from ssrf import SSRFPolicy, HostResolver
 import stream
-from stream import StreamResponse
+from stream import StreamResponse, UploadStream
 import errors
 from errors import RetryExhaustedError, TransportError, UnsupportedFeatureError
 import nox.strings
@@ -68,6 +70,8 @@ class Client:
     timeout_ms: int
     ssrf_policy: SSRFPolicy | None
     transport: Transport
+    content_decoder: ContentDecoder | None
+    advertise_decoder_encoding: bool
 
     def __init__(
         self: Client,
@@ -79,7 +83,7 @@ class Client:
     ) -> None:
         self.base_url = base_url
         self.default_headers = Headers()
-        self.default_headers.set("User-Agent", "Nova/0.6.2")
+        self.default_headers.set("User-Agent", "Nova/0.7.0")
         self.default_headers.set("Accept", "*/*")
         self.basic_auth = None
         self.bearer_auth = None
@@ -90,6 +94,8 @@ class Client:
         self.timeout_ms = timeout_ms
         self.ssrf_policy = ssrf_policy
         self.transport = TransportAdapter()
+        self.content_decoder = None
+        self.advertise_decoder_encoding = False
 
     # SCOPE: the Nox runtime pool is PROCESS-WIDE (nox.http.client_pool). Calling this on any
     # Client reconfigures the pool for EVERY Client / request in the process; connections are
@@ -144,6 +150,23 @@ class Client:
 
     def set_retry_policy(self: Client, policy: RetryPolicy) -> Client:
         self.retry_policy = policy
+        return self
+
+    # SCOPE: nox.http.set_http3 is PROCESS-WIDE (Alt-Svc discovery for HTTPS origins; falls back
+    # transparently to HTTP/2 / HTTP/1.1 if unavailable or UDP 443 is blocked).
+    def set_http3(self: Client, enabled: bool) -> Client:
+        configure_http3(enabled)
+        return self
+
+    def http3_scope(self: Client) -> str:
+        return HTTP3_SCOPE
+
+    # Opt-in pluggable response decoder (e.g. FallbackContentDecoder on WASM/mobile, or
+    # brotli_codec.BrotliDecoder on desktop). Set `advertise_accept_encoding=True` to automatically
+    # advertise the decoder's `Accept-Encoding` token when not already specified per-request.
+    def set_content_decoder(self: Client, decoder: ContentDecoder, advertise_accept_encoding: bool = False) -> Client:
+        self.content_decoder = decoder
+        self.advertise_decoder_encoding = advertise_accept_encoding
         return self
 
     def send(self: Client, req: Request) -> Response:
@@ -241,6 +264,10 @@ class Client:
                     current_req = Request(next_method, next_url, next_headers, next_body, current_req.timeout_ms)
                     continue
 
+                dec: ContentDecoder | None = self.content_decoder
+                if dec is not None:
+                    final_res = decode_response_with(final_res, dec, True)
+
                 if self.raise_on_status:
                     final_res.raise_for_status()
 
@@ -278,6 +305,14 @@ class Client:
         jar: CookieJar | None = self.cookies
         if jar is not None:
             jar.apply_to_request(full_url, req_headers)
+
+        # Optional decoder negotiation
+        dec: ContentDecoder | None = self.content_decoder
+        if dec is not None and self.advertise_decoder_encoding:
+            if not req_headers.has("Accept-Encoding"):
+                enc_hdr: str = dec.accept_encoding()
+                if len(enc_hdr) > 0:
+                    req_headers.set("Accept-Encoding", enc_hdr)
 
         # Handle JSON body
         payload: str = body
@@ -447,6 +482,47 @@ class Client:
             s_resp.raise_for_status()
 
         return s_resp
+
+    # Streaming request body upload (chunked when content_length == -1, fixed-size when >= 0).
+    def stream_upload(
+        self: Client,
+        method: str,
+        url: str,
+        content_length: int = -1,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = -1
+    ) -> UploadStream:
+        full_url: str = resolve_url(self.base_url, url, params)
+
+        s_pol: SSRFPolicy | None = self.ssrf_policy
+        if s_pol is not None:
+            s_pol.validate_target(full_url)
+
+        req_headers: Headers = self.default_headers.clone()
+        if headers is not None:
+            req_headers.merge_dict(headers)
+
+        b_auth: BasicAuth | None = self.basic_auth
+        if b_auth is not None:
+            b_auth.apply(req_headers)
+
+        tok_auth: BearerAuth | None = self.bearer_auth
+        if tok_auth is not None:
+            tok_auth.apply(req_headers)
+
+        jar: CookieJar | None = self.cookies
+        if jar is not None:
+            jar.apply_to_request(full_url, req_headers)
+
+        eff_timeout: int = self.timeout_ms
+        if timeout_ms >= 0:
+            eff_timeout = timeout_ms
+
+        req: Request = Request(method, full_url, req_headers, "", eff_timeout)
+        up: UploadStream = self.transport.stream_upload(req, content_length)
+        up.raise_on_status = self.raise_on_status
+        return up
 
 # Factory for pre-hardened, defense-in-depth clients (e.g. for fetching user-supplied URLs).
 # Enables default SSRF blocking, sets 15s timeout, limits redirects to 3, and enables raise_for_status.

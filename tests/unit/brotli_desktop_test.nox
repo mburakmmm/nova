@@ -1,0 +1,73 @@
+# tests/unit/brotli_desktop_test.nox — Desktop opt-in Brotli (`Content-Encoding: br`) tests via `nox.brotli`.
+
+import nox.test
+import nox.base64
+import brotli_codec
+from brotli_codec import BrotliDecoder, decompress_brotli, decompress_response, is_brotli_supported
+import client
+from client import Client
+import response
+from response import Response
+import headers
+from headers import Headers
+import errors
+from errors import DecodeError, UnsupportedFeatureError
+import mock_transport
+from mock_transport import MockTransport
+
+# 1. Availability & metadata
+nox.test.assert_true(is_brotli_supported(), "nox.brotli is supported on desktop")
+dec: BrotliDecoder = BrotliDecoder()
+nox.test.assert_eq_str(dec.backend(), "nox.brotli", "BrotliDecoder backend name")
+nox.test.assert_true(dec.supports_brotli(), "BrotliDecoder supports brotli")
+nox.test.assert_true(dec.supports("BR"), "BrotliDecoder supports case-insensitive br")
+nox.test.assert_eq_str(dec.accept_encoding(), "gzip, deflate, br", "BrotliDecoder Accept-Encoding value")
+
+# 2. Decompress real RFC 7932 Brotli vectors (empty, UTF-8, repeated data)
+empty_br: str = nox.base64.decode("Pw==")
+nox.test.assert_eq_str(decompress_brotli(empty_br), "", "empty brotli stream decodes to empty string")
+
+utf_br: str = nox.base64.decode("H9cO+J0Jtq2C9RA3x6y3KNHk8ppt+C5snqbaJgjZW1wYIuTPAECxd5IN")
+expected_utf: str = "héllo wörld çay " * 200
+nox.test.assert_eq_str(decompress_brotli(utf_br), expected_utf, "UTF-8 brotli vector decodes accurately")
+
+# 3. Corrupted / bomb-limit error mapping to DecodeError
+bad_caught: bool = False
+try:
+    _bad: str = decompress_brotli("not-valid-brotli-stream")
+except DecodeError:
+    bad_caught = True
+nox.test.assert_true(bad_caught, "corrupt brotli raises DecodeError")
+
+rep_br: str = nox.base64.decode("X5+7jV8yTGwsPgsCrmYbNA==")
+bomb_caught: bool = False
+try:
+    _bomb: str = decompress_brotli(rep_br, 1000)
+except DecodeError:
+    bomb_caught = True
+nox.test.assert_true(bomb_caught, "decompression exceeding max_output_bytes raises DecodeError")
+
+# 4. Response & Client.set_content_decoder end-to-end decoding + Accept-Encoding negotiation
+mt: MockTransport = MockTransport()
+mt.add_response(200, utf_br, {"Content-Encoding": "br", "Content-Type": "text/plain"})
+mt.add_response(200, expected_utf, {"Content-Type": "text/plain"})
+
+cli: Client = Client("https://api.example.com")
+cli.set_transport(mt)
+cli.set_content_decoder(dec, True)
+
+res_br: Response = cli.get("/compressed")
+nox.test.assert_eq_str(res_br.body, expected_utf, "Client with BrotliDecoder auto-decodes Content-Encoding: br")
+nox.test.assert_eq_str(mt.requests[0].headers.get("Accept-Encoding"), "gzip, deflate, br", "Accept-Encoding negotiated when enabled")
+
+res_plain: Response = cli.get("/plain")
+nox.test.assert_eq_str(res_plain.body, expected_utf, "uncompressed response untouched")
+
+# Standalone response decompression helper
+raw_h: Headers = Headers()
+raw_h.set("Content-Encoding", "br")
+standalone_resp: Response = Response(200, utf_br, raw_h, "https://example.com", "GET", 1)
+decoded_resp: Response = decompress_response(standalone_resp)
+nox.test.assert_eq_str(decoded_resp.body, expected_utf, "decompress_response decodes br payload")
+
+print("brotli_desktop_test passed")

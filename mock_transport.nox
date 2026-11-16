@@ -8,16 +8,17 @@ from request import Request
 import response
 from response import Response
 import stream
-from stream import StreamResponse
+from stream import StreamResponse, UploadStream
 import headers
 from headers import Headers, response_headers_from_dict
 import transport
 from transport import Transport
 import errors
-from errors import TransportError
+from errors import TransportError, UnsupportedFeatureError, EncodeError
 
 class MockTransport(Transport):
     requests: list[Request]
+    uploads: list[UploadStream]
     queue: list[Response]
     queue_errors: list[str]
     route_urls: list[str]
@@ -26,6 +27,7 @@ class MockTransport(Transport):
 
     def __init__(self: MockTransport) -> None:
         self.requests = []
+        self.uploads = []
         self.queue = []
         self.queue_errors = []
         self.route_urls = []
@@ -100,3 +102,19 @@ class MockTransport(Transport):
     def stream(self: MockTransport, req: Request) -> StreamResponse:
         r: Response = self._next(req)
         return StreamResponse(r.status_code, r.headers, req.url, req.method, r.body, None)
+
+    def stream_upload(self: MockTransport, req: Request, content_length: int = -1) -> UploadStream:
+        if content_length < -1:
+            raise EncodeError("content_length must be -1 (chunked) or >= 0")
+        m: str = req.method
+        if m != "POST" and m != "PUT" and m != "PATCH":
+            raise UnsupportedFeatureError(m, "Streaming upload requires POST, PUT, or PATCH; got: " + m)
+        r: Response = self._next(req)
+        up: UploadStream = UploadStream(req.url, m, content_length, None, r.status_code, r.headers, r.body, False)
+        rec: list[UploadStream] = self.uploads
+        rec.append(up)
+        self.uploads = rec
+        return up
+
+    def last_upload(self: MockTransport) -> UploadStream:
+        return self.uploads[len(self.uploads) - 1]

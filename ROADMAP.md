@@ -176,7 +176,18 @@ Source: external audit of v0.5.0 (score 8.3/10). Order = priority.
 
 ---
 
-### ⏳ Phase 7 — Stable 1.0 Release (NEXT)
+### ✅ Phase 6.3 — Nox v2.1.186 Parity, Protected C Extensions & Cross-Platform CI (v0.7.0 — COMPLETED)
+- [x] **6.3.1 Streaming Request Uploads (`UploadStream`)**: Added `Client.stream_upload()` and `nova.stream_upload()` wrapping `nox.http.stream_upload` with chunked (`-1`) and fixed-length `EncodeError` guards, `finish()`, `finish_stream()`, and `MockTransport` upload recording.
+- [x] **6.3.2 HTTP/3 Discovery (`set_http3`)**: Added `Client.set_http3()`, `Client.http3_scope()`, and `nova.set_http3()` backed by `nox.http.set_http3` with transparent TCP fallback.
+- [x] **6.3.3 Protected WASM/Mobile Fallback & Desktop Opt-In C Extensions**:
+  - Core `codec.nox` (`ContentDecoder`, `FallbackContentDecoder`) and `json_adapter.nox` (`JsonReader`, `NoxJsonReader`) guarantee 100% pure-Nox compilation on `wasm32-wasi`, `wasm32-freestanding`, `ios-arm64`, and `android-arm64`.
+  - Opt-in desktop modules `brotli_codec.nox` (`nox.brotli` for `Content-Encoding: br` decompression) and `yyjson_adapter.nox` (`nox.yyjson` zero-copy DOM JSON reader) unlock desktop capabilities without pulling `noxclibs.a` into WASM/mobile builds.
+- [x] **6.3.4 O(1) Public Suffix Lookup & M:N Multi-Worker Stress Tests**: Replaced linear string scan in `psl.nox` with read-only frozen `_PSL_MAP` lookup (~0.03 µs/check) and verified multi-worker `spawn` concurrency safety.
+- [x] **6.3.5 Supply Chain & Multi-OS CI**: Added `"source": "nox"` to `nox.json`, generated CycloneDX 1.5 `sbom.cdx.json` via `noxc sbom`, upgraded CI to `noxc v2.1.186` with `windows-latest`, OpenSSL runtime wiring, and cross-target WASM/mobile checks.
+
+---
+
+### ⏳ Phase 7 — Stable 1.0 Release (NEXT — Deferred intentionally post-v0.7.0)
 - [ ] **7.1. Public API Freeze**
 - [ ] **7.2. Pool benchmark**
 - [ ] **7.3. Security checklist sign-off**

@@ -1,11 +1,14 @@
-# stream.nox — Streaming response model and chunked reader per AGENTS.md §16.
+# stream.nox — Streaming response & upload models per AGENTS.md §16.
 
 import nox.http
-from nox.http import HttpStream
+from nox.http import HttpStream, HttpError, HttpTimeoutError
+import nox.time
 import headers
-from headers import Headers
+from headers import Headers, response_headers_from_dict
+import response
+from response import Response
 import errors
-from errors import HttpStatusError, DecodeError
+from errors import HttpStatusError, DecodeError, TransportError, TimeoutError, EncodeError
 import url
 from url import sanitize_url
 import nox.bytes
@@ -205,5 +208,132 @@ class StreamResponse:
         return self
 
     def __exit__(self: StreamResponse) -> None:
+        self.close()
+
+# Streaming request upload wrapper over `nox.http.HttpStream` (`stream_upload`).
+# Supports incremental chunked (`content_length=-1`) or fixed-length uploads without buffering the request body.
+class UploadStream:
+    url: str
+    method: str
+    content_length: int
+    bytes_sent: int
+    is_finished: bool
+    is_closed: bool
+    raise_on_status: bool
+    native_stream: HttpStream | None
+    mock_status: int
+    mock_headers: Headers
+    mock_body: str
+    uploaded_buf: str
+    start_ms: int
+
+    def __init__(
+        self: UploadStream,
+        url: str,
+        method: str,
+        content_length: int = -1,
+        native_stream: HttpStream | None = None,
+        mock_status: int = 200,
+        mock_headers: Headers | None = None,
+        mock_body: str = "",
+        raise_on_status: bool = False
+    ) -> None:
+        self.url = url
+        self.method = method
+        self.content_length = content_length
+        self.bytes_sent = 0
+        self.is_finished = False
+        self.is_closed = False
+        self.raise_on_status = raise_on_status
+        self.native_stream = native_stream
+        self.mock_status = mock_status
+        if mock_headers is not None:
+            self.mock_headers = mock_headers
+        else:
+            self.mock_headers = Headers()
+        self.mock_body = mock_body
+        self.uploaded_buf = ""
+        self.start_ms = nox.time.now_ms()
+
+    def write(self: UploadStream, chunk: str) -> None:
+        if self.is_closed:
+            raise TransportError("UploadStream is already closed for " + sanitize_url(self.url))
+        if self.is_finished:
+            raise TransportError("UploadStream is already finished for " + sanitize_url(self.url))
+        chunk_bytes: int = nox.strings.byte_len(chunk)
+        if self.content_length >= 0 and self.bytes_sent + chunk_bytes > self.content_length:
+            raise EncodeError("Upload write (" + str(self.bytes_sent + chunk_bytes) + " bytes) exceeds declared content_length (" + str(self.content_length) + " bytes)")
+        if chunk_bytes == 0:
+            return
+        ns: HttpStream | None = self.native_stream
+        if ns is not None:
+            try:
+                ns.write(chunk)
+            except HttpTimeoutError as te:
+                self.is_closed = True
+                raise TimeoutError("Upload write timed out for " + self.method + " " + sanitize_url(self.url) + ": " + str(te))
+            except HttpError as e:
+                self.is_closed = True
+                raise TransportError("Upload write failed for " + self.method + " " + sanitize_url(self.url) + ": " + str(e))
+        else:
+            self.uploaded_buf = self.uploaded_buf + chunk
+        self.bytes_sent = self.bytes_sent + chunk_bytes
+
+    def write_bytes(self: UploadStream, buf: Buffer) -> None:
+        self.write(nox.bytes.to_str(buf))
+
+    def finish_stream(self: UploadStream) -> StreamResponse:
+        if self.is_closed:
+            raise TransportError("UploadStream is already closed for " + sanitize_url(self.url))
+        if self.is_finished:
+            raise TransportError("UploadStream has already been finished for " + sanitize_url(self.url))
+        if self.content_length >= 0 and self.bytes_sent != self.content_length:
+            raise EncodeError("Upload finished with " + str(self.bytes_sent) + " bytes, expected content_length=" + str(self.content_length))
+
+        self.is_finished = True
+        ns: HttpStream | None = self.native_stream
+        if ns is not None:
+            try:
+                ns.finish()
+                resp_headers: Headers = response_headers_from_dict(ns.headers)
+                s_resp: StreamResponse = StreamResponse(ns.status, resp_headers, self.url, self.method, "", ns)
+                if self.raise_on_status:
+                    s_resp.raise_for_status()
+                return s_resp
+            except HttpTimeoutError as te:
+                self.is_closed = True
+                raise TimeoutError("Upload finish timed out for " + self.method + " " + sanitize_url(self.url) + ": " + str(te))
+            except HttpError as e:
+                self.is_closed = True
+                raise TransportError("Upload finish failed for " + self.method + " " + sanitize_url(self.url) + ": " + str(e))
+
+        s_mock: StreamResponse = StreamResponse(self.mock_status, self.mock_headers.clone(), self.url, self.method, self.mock_body, None)
+        if self.raise_on_status:
+            s_mock.raise_for_status()
+        return s_mock
+
+    def finish(self: UploadStream) -> Response:
+        s_resp: StreamResponse = self.finish_stream()
+        body: str = s_resp.read_all()
+        s_resp.close()
+        self.is_closed = True
+        elapsed: int = nox.time.now_ms() - self.start_ms
+        return Response(s_resp.status_code, body, s_resp.headers, self.url, self.method, elapsed)
+
+    # Recorded bytes written when backed by MockTransport (empty on native sockets to keep zero-buffer streaming).
+    def uploaded_data(self: UploadStream) -> str:
+        return self.uploaded_buf
+
+    def close(self: UploadStream) -> None:
+        if not self.is_closed:
+            self.is_closed = True
+            ns: HttpStream | None = self.native_stream
+            if ns is not None:
+                ns.close()
+
+    def __enter__(self: UploadStream) -> UploadStream:
+        return self
+
+    def __exit__(self: UploadStream) -> None:
         self.close()
 

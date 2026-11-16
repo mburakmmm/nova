@@ -1,0 +1,66 @@
+# brotli_codec.nox — Opt-in desktop Brotli (`Content-Encoding: br`) codec backed by `nox.brotli`.
+#
+# IMPORTANT TARGET BOUNDARY:
+# This module imports `nox.brotli` (linked from `noxclibs.a` on macOS, Linux, and Windows).
+# Do NOT import this module in WASM (`wasm32-*`) or mobile (`ios-*`, `android-*`) builds;
+# core `nova` / `nova.codec` provides `FallbackContentDecoder` in pure Nox so WASM and mobile
+# builds stay 100% protected and dependency-free.
+
+import nox.brotli
+from nox.brotli import BrotliError
+import codec
+from codec import ContentDecoder, normalize_encoding, decode_response_with
+import response
+from response import Response
+import errors
+from errors import DecodeError, UnsupportedFeatureError
+
+# Default 64 MiB decompression limit prevents compression-bomb memory exhaustion.
+DEFAULT_BROTLI_MAX_OUTPUT: int = 67108864
+
+def is_brotli_supported() -> bool:
+    return nox.brotli.is_supported()
+
+def decompress_brotli(data: str, max_output_bytes: int = 67108864) -> str:
+    if len(data) == 0:
+        return ""
+    if max_output_bytes < 0:
+        raise DecodeError("max_output_bytes must be non-negative")
+    try:
+        return nox.brotli.decompress(data, max_output_bytes)
+    except BrotliError as e:
+        raise DecodeError("Brotli decompression failed: " + str(e))
+
+# Pluggable ContentDecoder adding `br` support on desktop targets (macOS, Linux, Windows).
+class BrotliDecoder(ContentDecoder):
+    max_output_bytes: int
+
+    def __init__(self: BrotliDecoder, max_output_bytes: int = 67108864) -> None:
+        if max_output_bytes < 0:
+            raise DecodeError("max_output_bytes must be non-negative")
+        self.max_output_bytes = max_output_bytes
+
+    def backend(self: BrotliDecoder) -> str:
+        return "nox.brotli"
+
+    def accept_encoding(self: BrotliDecoder) -> str:
+        return "gzip, deflate, br"
+
+    def supports_brotli(self: BrotliDecoder) -> bool:
+        return True
+
+    def supports(self: BrotliDecoder, encoding: str) -> bool:
+        enc: str = normalize_encoding(encoding)
+        return enc == "br" or enc == "identity" or len(enc) == 0
+
+    def decode(self: BrotliDecoder, encoding: str, data: str) -> str:
+        enc: str = normalize_encoding(encoding)
+        if len(enc) == 0 or enc == "identity":
+            return data
+        if enc == "br":
+            return decompress_brotli(data, self.max_output_bytes)
+        raise UnsupportedFeatureError(enc, "Unsupported Content-Encoding for BrotliDecoder: " + enc)
+
+def decompress_response(resp: Response, max_output_bytes: int = 67108864) -> Response:
+    dec: BrotliDecoder = BrotliDecoder(max_output_bytes)
+    return decode_response_with(resp, dec, True)

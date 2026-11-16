@@ -5,6 +5,32 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-15
+
+### Added — Nox v2.1.186 Integrations, Protected WASM/Mobile Fallback & Cross-Platform CI
+- **Streaming Request Uploads (`stream.nox`, `transport.nox`, `mock_transport.nox`, `client.nox`, `nova.nox`)**:
+  - Added `UploadStream` context manager wrapping `nox.http.stream_upload` (`write`, `write_bytes`, `finish -> Response`, `finish_stream -> StreamResponse`, `close`).
+  - Supports both chunked Transfer-Encoding (`content_length=-1`) and fixed-length uploads with strict overflow/underflow `EncodeError` checks and SSRF/method validation (`POST`/`PUT`/`PATCH` only).
+  - Added `MockTransport.stream_upload()` and `last_upload()` recording for offline deterministic tests.
+- **HTTP/3 (QUIC / Alt-Svc) Support (`transport.nox`, `client.nox`, `nova.nox`)**:
+  - Added `Client.set_http3(enabled: bool)`, `Client.http3_scope() -> "process"`, and top-level `nova.set_http3(enabled)`. Delegates to `nox.http.set_http3` with transparent fallback to HTTP/2 / HTTP/1.1.
+- **Protected Cross-Platform Content Codecs (`codec.nox` + Desktop `brotli_codec.nox`)**:
+  - Added pure-Nox `ContentDecoder` interface and `FallbackContentDecoder` (compiles cleanly on `wasm32-wasi`, `wasm32-freestanding`, `ios-arm64`, `android-arm64`), failing explicitly with `UnsupportedFeatureError` on `br` when desktop Brotli is absent.
+  - Added opt-in desktop module `brotli_codec.nox` (`BrotliDecoder`, `decompress_brotli`, `decompress_response`, `is_brotli_supported`) backed by `nox.brotli` with configurable decompression-bomb limit (`64 MiB` default), kept separate from `nova.nox` so WASM/mobile targets remain dependency-free.
+  - Wired `Client.set_content_decoder(decoder, advertise_accept_encoding=False)` into `Client.send()` and `Client.request()`.
+- **Unified Fast JSON Adapter (`json_adapter.nox` + Desktop `yyjson_adapter.nox`)**:
+  - Added pure-Nox `JsonDocument` / `JsonReader` interfaces with `NoxJsonDocument` / `NoxJsonReader` (`nox.json` fallback guaranteed for WASM/mobile).
+  - Added opt-in desktop module `yyjson_adapter.nox` (`YyJsonDocument`, `YyJsonReader`, `parse_yyjson`, `parse_yyjson_response`) backed by `nox.yyjson` (including `relaxed` and `json5` modes).
+- **O(1) Public Suffix Lookup (`psl.nox`)**:
+  - Built frozen hash-map lookup table `_PSL_MAP` at module initialization from `_PSL_DATA` (8,650+ Mozilla PSL entries), keeping `scripts/update_psl.py --apply` compatibility and reducing lookups to O(1) (~0.033 µs/check).
+- **Supply Chain Security & Cross-Platform CI (`nox.json`, `sbom.cdx.json`, `.github/workflows/ci.yml`)**:
+  - Added `"source": "nox"` declaration in `nox.json` and generated deterministic CycloneDX 1.5 `sbom.cdx.json` via `noxc sbom`.
+  - Upgraded CI to `noxc v2.1.186`, added `windows-latest` matrix runner (with `install.ps1` and OpenSSL runtime DLL path resolution), and added cross-target type-checking for `wasm32-wasi`, `wasm32-freestanding`, `ios-arm64`, and `android-arm64`.
+- **Tests & Benchmarks**:
+  - Added 6 new test suites: `codec_fallback_test.nox`, `brotli_desktop_test.nox`, `json_adapters_test.nox`, `stream_upload_http3_test.nox`, `stream_upload_integration_test.nox` (local server, zero internet dependency), and `mn_worker_stress_test.nox` (`38` total tests).
+  - Expanded `benchmarks/bench_nova.nox` with O(1) PSL and `nox.json` vs `nox.yyjson` benchmarks.
+- **User-Agent**: Default `User-Agent` header updated to `Nova/0.7.0`.
+
 ## [0.6.2] - 2026-11-12
 
 ### Robustness & Real-World Concurrency (external audit of v0.6.1)

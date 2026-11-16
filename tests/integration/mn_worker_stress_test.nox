@@ -1,0 +1,63 @@
+# tests/integration/mn_worker_stress_test.nox — Multi-worker M:N concurrent safety across O(1) PSL, CookieJar, JsonReader, and MockTransport uploads.
+
+import nox.test
+import psl
+import cookies
+from cookies import CookieJar
+import headers
+from headers import Headers
+import json_adapter
+from json_adapter import NoxJsonReader, JsonDocument
+import client
+from client import Client
+import mock_transport
+from mock_transport import MockTransport
+import stream
+from stream import UploadStream
+import response
+from response import Response
+
+async def worker_job(worker_id: int) -> int:
+    # 1. Read-only O(1) PSL lookup concurrency
+    nox.test.assert_true(psl.is_public_suffix("co.uk"), "co.uk public suffix under worker")
+    nox.test.assert_true(psl.is_public_suffix("deno.dev"), "deno.dev public suffix under worker")
+    nox.test.assert_true(not psl.is_public_suffix("service.example.com"), "service domain not public suffix")
+
+    # 2. Per-worker isolated CookieJar & Headers
+    jar: CookieJar = CookieJar()
+    h: Headers = Headers()
+    h.set("Set-Cookie", "sid=w" + str(worker_id) + "; Path=/; HttpOnly")
+    jar.extract_from_response("https://app.example.com/login", h)
+    c_hdr: str = jar.to_cookie_header("https://app.example.com/api")
+    nox.test.assert_eq_str(c_hdr, "sid=w" + str(worker_id), "isolated CookieJar per worker")
+
+    # 3. Pure NoxJsonReader concurrent parse
+    jr: NoxJsonReader = NoxJsonReader()
+    doc: JsonDocument = jr.parse("{\"worker\":" + str(worker_id) + ",\"ok\":true}")
+    nox.test.assert_eq_int(doc.get_int("worker"), worker_id, "json parsed worker_id matches")
+
+    # 4. Concurrent Client + MockTransport streaming upload
+    mt: MockTransport = MockTransport()
+    mt.add_response(200, "ack-" + str(worker_id))
+    cli: Client = Client("https://api.example.com")
+    cli.set_transport(mt)
+    with cli.stream_upload("POST", "/batch") as up:
+        up.write("part-" + str(worker_id))
+        res: Response = up.finish()
+        nox.test.assert_eq_str(res.body, "ack-" + str(worker_id), "worker upload ack matches")
+        nox.test.assert_eq_str(up.uploaded_data(), "part-" + str(worker_id), "worker uploaded bytes isolated")
+
+    return worker_id
+
+t0: Task[int] = spawn worker_job(0)
+t1: Task[int] = spawn worker_job(1)
+t2: Task[int] = spawn worker_job(2)
+t3: Task[int] = spawn worker_job(3)
+t4: Task[int] = spawn worker_job(4)
+t5: Task[int] = spawn worker_job(5)
+t6: Task[int] = spawn worker_job(6)
+t7: Task[int] = spawn worker_job(7)
+
+sum_ids: int = (await t0) + (await t1) + (await t2) + (await t3) + (await t4) + (await t5) + (await t6) + (await t7)
+nox.test.assert_eq_int(sum_ids, 28, "all 8 concurrent M:N workers completed accurately")
+print("mn_worker_stress_test passed")

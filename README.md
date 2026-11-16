@@ -1,8 +1,8 @@
 # Nova — Modern HTTP Client for Nox
 
-[![Nox Version](https://img.shields.io/badge/noxc-2.1.64-blue.svg)](https://github.com/mburakmmm/nox-lang)
+[![Nox Version](https://img.shields.io/badge/noxc-2.1.186-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-32%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-38%20passed-brightgreen.svg)]()
 
 > A pleasant, safe, predictable, production-oriented HTTP client for the **Nox programming language**, inspired by Python Requests and HTTPX.
 
@@ -57,7 +57,7 @@ Add Nova to your `nox.json`:
   "version": "0.1.0",
   "entry": "main.nox",
   "requires": [
-    { "alias": "nova", "repo": "github.com/mburakmmm/nova", "ref": "v0.1.0" }
+    { "alias": "nova", "repo": "github.com/mburakmmm/nova", "ref": "v0.7.0" }
   ]
 }
 ```
@@ -411,12 +411,47 @@ except NovaError as ne:
 | HTTP / HTTPS Proxy | ✅ Supported | Transparent `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` with `CONNECT` tunnel |
 | SSRF Protection Shield | ⚠️ Partial | Real IPv4/IPv6 parser, resolver validation, strict-hostname mode, allowlist DNS validation. DNS-rebinding TOCTOU needs Nox runtime socket pinning — use `set_strict_hostnames(True)` for untrusted URLs |
 | Safe Client Factory | ✅ Supported | `create_safe_client()` / `nova.safe_client()` with default SSRF shield, optional `HostResolver`, 15s timeout, 3-redirect limit, and `raise_for_status` |
-| Cookie Expiry / Public Suffix | ✅ Supported | `Expires`/`Max-Age`, full official Mozilla PSL (8,650+ suffixes) with automated updater (`scripts/update_psl.py`) |
+| Cookie Expiry / Public Suffix | ✅ Supported | `Expires`/`Max-Age`, O(1) lookup over full Mozilla PSL (8,650+ suffixes, ~0.03 µs/check) |
 | Multiple `Set-Cookie` | ⚠️ Partial | Nova supports it; current Nox runtime keeps only the last header |
 | Lazy Streaming | ✅ Supported | `read_line`, `for_each_line`, `for_each_chunk` (`iter_*` buffer), bounded by `max_line_bytes` measuring raw UTF-8 bytes |
+| Streaming Request Upload | ✅ Supported | `UploadStream` via `Client.stream_upload` / `nova.stream_upload` (chunked `-1` & fixed `Content-Length`) |
+| HTTP/3 (QUIC / Alt-Svc) | ✅ Supported | `Client.set_http3(True)` / `nova.set_http3(True)` (**process-wide**; transparent TCP fallback) |
+| Brotli (`Content-Encoding: br`) | 🖥️ Desktop Opt-In + Fallback | Opt-in `brotli_codec.BrotliDecoder` (`nox.brotli`) on desktop; WASM & mobile compile with `FallbackContentDecoder` |
+| Fast JSON (`yyjson`) | 🖥️ Desktop Opt-In + Fallback | Opt-in `yyjson_adapter.YyJsonReader` (`nox.yyjson`) on desktop; pure `NoxJsonReader` (`nox.json`) fallback everywhere |
+| WASM & Mobile Target Safety | ✅ Verified | `nova.nox` core compiles cleanly on `wasm32-wasi`, `wasm32-freestanding`, `ios-arm64`, and `android-arm64` |
 | Retry jitter / HTTP-date `Retry-After` | ✅ Supported | Opt-in jitter |
 | Transport Injection | ✅ Supported | `Client.set_transport()`, `MockTransport` |
-| Async Concurrency | ✅ Supported | Fiber tasks via Nox runtime (`spawn` / `Task[T]`), real network & mock concurrency stress tested |
+| Async Concurrency | ✅ Supported | Fiber tasks via Nox runtime (`spawn` / `Task[T]`), M:N worker & live pool stress tested |
+| Platforms & SBOM | ✅ Verified | CI on `macos-latest`, `ubuntu-latest`, `windows-latest`; `"source": "nox"` + CycloneDX 1.5 `sbom.cdx.json` |
+
+---
+
+## Cross-Target Architecture (WASM & Mobile Safety vs Desktop Opt-In)
+
+Core `nova` (`import nova`) uses **only pure-Nox & portable stdlib APIs**, ensuring compilation on Desktop, `wasm32-wasi`, `wasm32-freestanding`, `ios-arm64`, and `android-arm64` without linking `noxclibs.a`.
+
+Desktop applications (`macOS`, `Linux`, `Windows`) can opt in to C-backed stdlib capabilities cleanly:
+
+```nox
+# Pure-Nox core (Desktop, WASM, iOS, Android):
+import nova
+from nova import Client, FallbackContentDecoder, NoxJsonReader, JsonReader
+
+cli: Client = Client("https://api.example.com")
+cli.set_content_decoder(FallbackContentDecoder())
+reader: JsonReader = NoxJsonReader()
+```
+
+```nox
+# Desktop-only opt-in acceleration & Brotli Content-Encoding: br (do NOT import on WASM/mobile):
+import brotli_codec
+from brotli_codec import BrotliDecoder
+import yyjson_adapter
+from yyjson_adapter import YyJsonReader
+
+cli.set_content_decoder(BrotliDecoder(), True)
+fast_reader: JsonReader = YyJsonReader()
+```
 
 ---
 
@@ -430,7 +465,7 @@ noxc test
 
 Output:
 ```text
-32 passed, 0 failed (32 total)
+38 passed, 0 failed (38 total)
 ```
 
 Run demonstration:

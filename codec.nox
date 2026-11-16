@@ -1,0 +1,74 @@
+# codec.nox — Pure-Nox pluggable Content-Encoding abstraction and safe WASM/mobile fallback.
+#
+# `nox.http` automatically decodes `gzip` and `deflate` on desktop/WASM where supported.
+# Encodings not provided by pure Nox stdlib (notably HTTP `Content-Encoding: br` / Brotli)
+# use this pure-Nox interface:
+# - Default / WASM / mobile builds use `FallbackContentDecoder` (pure Nox, zero C deps).
+# - Desktop applications needing Brotli opt in via `brotli_codec.BrotliDecoder`.
+
+import nox.strings
+import response
+from response import Response
+import errors
+from errors import DecodeError, UnsupportedFeatureError
+
+def normalize_encoding(encoding: str) -> str:
+    return nox.strings.lower(nox.strings.trim(encoding))
+
+# Abstract content decoder hook for Client or standalone response decoding.
+class ContentDecoder:
+    def backend(self: ContentDecoder) -> str:
+        return "abstract"
+
+    def accept_encoding(self: ContentDecoder) -> str:
+        return ""
+
+    def supports_brotli(self: ContentDecoder) -> bool:
+        return False
+
+    def supports(self: ContentDecoder, encoding: str) -> bool:
+        return False
+
+    def decode(self: ContentDecoder, encoding: str, data: str) -> str:
+        raise UnsupportedFeatureError(encoding, "ContentDecoder.decode is not implemented")
+
+# Guaranteed pure-Nox fallback decoder (safe on WASM, iOS, Android, and desktop without noxclibs).
+# Handles identity payloads natively and fails explicitly on unsupported encodings such as Brotli (`br`)
+# rather than returning corrupt compressed bytes.
+class FallbackContentDecoder(ContentDecoder):
+    def __init__(self: FallbackContentDecoder) -> None:
+        pass
+
+    def backend(self: FallbackContentDecoder) -> str:
+        return "pure-nox-fallback"
+
+    def accept_encoding(self: FallbackContentDecoder) -> str:
+        return "gzip, deflate"
+
+    def supports_brotli(self: FallbackContentDecoder) -> bool:
+        return False
+
+    def supports(self: FallbackContentDecoder, encoding: str) -> bool:
+        enc: str = normalize_encoding(encoding)
+        return len(enc) == 0 or enc == "identity"
+
+    def decode(self: FallbackContentDecoder, encoding: str, data: str) -> str:
+        enc: str = normalize_encoding(encoding)
+        if len(enc) == 0 or enc == "identity":
+            return data
+        if enc == "br":
+            raise UnsupportedFeatureError("brotli", "Content-Encoding 'br' requires brotli_codec.BrotliDecoder (desktop only; unavailable in pure-Nox WASM/mobile fallback)")
+        raise UnsupportedFeatureError(enc, "Unsupported Content-Encoding in pure-Nox fallback decoder: " + enc)
+
+# Decode a Response's body using an explicit ContentDecoder.
+# Leaves empty/`identity` responses untouched; leaves `gzip`/`deflate` untouched only when already
+# handled by the transport (`from_nox_http_transport=True`).
+def decode_response_with(resp: Response, decoder: ContentDecoder, from_nox_http_transport: bool = True) -> Response:
+    enc_raw: str = resp.headers.get("Content-Encoding", "")
+    enc: str = normalize_encoding(enc_raw)
+    if len(enc) == 0 or enc == "identity":
+        return resp
+    if from_nox_http_transport and (enc == "gzip" or enc == "deflate"):
+        return resp
+    decoded: str = decoder.decode(enc, resp.body)
+    return Response(resp.status_code, decoded, resp.headers, resp.url, resp.method, resp.elapsed_ms)

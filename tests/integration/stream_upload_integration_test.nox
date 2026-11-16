@@ -1,0 +1,55 @@
+# tests/integration/stream_upload_integration_test.nox — Deterministic local HTTP server integration test for streaming upload & HTTP/3 toggle.
+
+import nox.http
+from nox.http import HttpRequest, HttpResponse
+import nox.test
+import nox.time
+import client
+from client import Client
+import stream
+from stream import UploadStream
+import response
+from response import Response
+
+def echo_handler(req: HttpRequest) -> HttpResponse:
+    if req.target == "/echo":
+        return HttpResponse(201, req.method + ":" + str(len(req.body)) + ":" + req.body, {"Content-Type": "text/plain", "X-Method": req.method})
+    return HttpResponse(200, "ok", {})
+
+async def run_server() -> int:
+    nox.http.serve(18971, echo_handler)
+    return 1
+
+srv_task: Task[int] = spawn run_server()
+nox.time.sleep_ms(120)
+
+# Enable HTTP/3 toggle safely (local cleartext stays HTTP/1.1 without affecting request)
+cli: Client = Client("http://127.0.0.1:18971")
+cli.set_http3(True)
+
+# 1. Fixed Content-Length PUT streaming upload
+up_fixed: UploadStream = cli.stream_upload("PUT", "/echo", 11)
+up_fixed.write("hello ")
+up_fixed.write("world")
+r_fixed: Response = up_fixed.finish()
+up_fixed.close()
+
+nox.test.assert_eq_int(r_fixed.status_code, 201, "fixed stream_upload status is 201")
+nox.test.assert_eq_str(r_fixed.body, "PUT:11:hello world", "local server received exact fixed streaming upload body")
+nox.test.assert_eq_str(r_fixed.headers.get("X-Method"), "PUT", "local server saw PUT method")
+
+# 2. Chunked Transfer-Encoding POST streaming upload (content_length=-1)
+with cli.stream_upload("POST", "/echo") as up_chunked:
+    up_chunked.write("chunk-one|")
+    up_chunked.write("chunk-two|")
+    up_chunked.write("chunk-three")
+    r_chunked: Response = up_chunked.finish()
+
+nox.test.assert_eq_int(r_chunked.status_code, 201, "chunked stream_upload status is 201")
+nox.test.assert_eq_str(r_chunked.body, "POST:31:chunk-one|chunk-two|chunk-three", "local server received exact chunked streaming upload body")
+
+cli.set_http3(False)
+nox.http.shutdown()
+_srv_done: int = await srv_task
+nox.test.assert_eq_int(_srv_done, 1, "local server exited cleanly on shutdown")
+print("stream_upload_integration_test passed")

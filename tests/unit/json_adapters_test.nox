@@ -1,0 +1,93 @@
+# tests/unit/json_adapters_test.nox — Tests pure NoxJsonReader fallback and opt-in YyJsonReader parity.
+
+import nox.test
+import json_adapter
+from json_adapter import JsonDocument, JsonReader, NoxJsonDocument, NoxJsonReader
+import yyjson_adapter
+from yyjson_adapter import YyJsonDocument, YyJsonReader, is_yyjson_supported, parse_yyjson, parse_yyjson_response
+import response
+from response import Response
+import headers
+from headers import Headers
+import errors
+from errors import DecodeError
+
+def verify_reader_parity(reader: JsonReader, expected_backend: str) -> None:
+    nox.test.assert_eq_str(reader.backend(), expected_backend, "reader backend name matches")
+
+    payload: str = "{\"name\":\"nova\",\"version\":7,\"ratio\":9.5,\"stable\":false,\"nullable\":null,\"tags\":[\"http\",\"http3\",\"stream\"]}"
+    doc: JsonDocument = reader.parse(payload)
+    nox.test.assert_eq_str(doc.backend(), expected_backend, "doc backend name matches")
+    nox.test.assert_true(doc.is_object(), "root is object")
+    nox.test.assert_true(doc.has("name"), "has key name")
+    nox.test.assert_true(doc.has("nullable"), "has key nullable even when null")
+    nox.test.assert_true(not doc.has("missing"), "missing key returns False")
+    nox.test.assert_eq_str(doc.get_str("name"), "nova", "get_str")
+    nox.test.assert_eq_int(doc.get_int("version"), 7, "get_int")
+    nox.test.assert_true(doc.get_float("ratio") > 9.4 and doc.get_float("ratio") < 9.6, "get_float")
+    nox.test.assert_true(not doc.get_bool("stable"), "get_bool")
+    nox.test.assert_true(doc.get("nullable").is_null(), "nullable field is_null")
+
+    tags: JsonDocument = doc.get("tags")
+    nox.test.assert_true(tags.is_array(), "tags is array")
+    nox.test.assert_eq_int(tags.array_len(), 3, "tags len == 3")
+    nox.test.assert_eq_str(tags.array_get(0).as_str(), "http", "array_get(0)")
+    nox.test.assert_eq_str(tags.array_get(-1).as_str(), "stream", "array_get(-1)")
+
+    # Response parsing
+    resp: Response = Response(200, payload, Headers(), "https://api.example.com/info", "GET", 1)
+    r_doc: JsonDocument = reader.parse_response(resp)
+    nox.test.assert_eq_str(r_doc.get_str("name"), "nova", "parse_response get_str")
+    nox.test.assert_true(len(r_doc.dump()) > 10, "dump works")
+    nox.test.assert_true(len(r_doc.dump_pretty(2)) > len(r_doc.dump()), "dump_pretty works")
+
+    # Error handling: empty body, invalid JSON, out of bounds, missing key
+    empty_err: bool = False
+    try:
+        _e: JsonDocument = reader.parse("")
+    except DecodeError:
+        empty_err = True
+    nox.test.assert_true(empty_err, "empty JSON raises DecodeError")
+
+    bad_err: bool = False
+    try:
+        _b: JsonDocument = reader.parse("{bad")
+    except DecodeError:
+        bad_err = True
+    nox.test.assert_true(bad_err, "invalid JSON raises DecodeError")
+
+    miss_err: bool = False
+    try:
+        _m: str = doc.get_str("does_not_exist")
+    except DecodeError:
+        miss_err = True
+    nox.test.assert_true(miss_err, "missing field raises DecodeError")
+
+    oob_err: bool = False
+    try:
+        _oob: JsonDocument = tags.array_get(99)
+    except DecodeError:
+        oob_err = True
+    nox.test.assert_true(oob_err, "array out-of-bounds raises DecodeError")
+
+# 1. Pure-Nox fallback reader (`nox.json`)
+nox_reader: NoxJsonReader = NoxJsonReader()
+verify_reader_parity(nox_reader, "nox.json")
+
+# 2. Desktop opt-in yyjson reader (`nox.yyjson`)
+nox.test.assert_true(is_yyjson_supported(), "yyjson supported on desktop")
+yy_reader: YyJsonReader = YyJsonReader()
+verify_reader_parity(yy_reader, "nox.yyjson")
+
+# 3. Relaxed / JSON5 modes supported by yyjson_adapter
+relaxed_doc: YyJsonDocument = parse_yyjson("{ /* cmt */ \"ok\": true, }", True, False)
+nox.test.assert_true(relaxed_doc.get_bool("ok"), "yyjson relaxed mode handles comments & trailing comma")
+
+json5_doc: YyJsonDocument = parse_yyjson("{ key: 'val', }", False, True)
+nox.test.assert_eq_str(json5_doc.get_str("key"), "val", "yyjson json5 mode handles unquoted keys")
+
+resp2: Response = Response(200, "{\"fast\":42}", Headers(), "https://example.com", "GET", 1)
+r2_doc: YyJsonDocument = parse_yyjson_response(resp2)
+nox.test.assert_eq_int(r2_doc.get_int("fast"), 42, "parse_yyjson_response helper")
+
+print("json_adapters_test passed")

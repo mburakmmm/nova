@@ -15,7 +15,11 @@ from retry import RetryPolicy, parse_retry_after_ms
 import ssrf
 from ssrf import SSRFPolicy, HostResolver, StaticResolver, IPAddress, parse_ip, classify_ip
 import stream
-from stream import StreamResponse, LineHandler, ChunkHandler
+from stream import StreamResponse, UploadStream, LineHandler, ChunkHandler
+import codec
+from codec import ContentDecoder, FallbackContentDecoder
+import json_adapter
+from json_adapter import JsonDocument, NoxJsonDocument, JsonReader, NoxJsonReader
 import response
 from response import Response
 import request
@@ -152,6 +156,21 @@ def stream(
 ) -> StreamResponse:
     c: Client = Client()
     return c.stream(method, url_target, body, params, headers_dict, timeout_ms)
+
+def stream_upload(
+    method: str,
+    url_target: str,
+    content_length: int = -1,
+    params: dict[str, str] | None = None,
+    headers_dict: dict[str, str] | None = None,
+    timeout_ms: int = -1
+) -> UploadStream:
+    c: Client = Client()
+    return c.stream_upload(method, url_target, content_length, params, headers_dict, timeout_ms)
+
+def set_http3(enabled: bool) -> None:
+    c: Client = Client()
+    c.set_http3(enabled)
 
 def set_connection_pool(max_idle: int = 32, idle_timeout_ms: int = 90000) -> None:
     c: Client = Client()

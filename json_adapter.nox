@@ -1,0 +1,220 @@
+# json_adapter.nox — Pure-Nox unified JSON reader interface with `nox.json` fallback.
+#
+# Provides `JsonDocument` and `JsonReader` implemented in pure Nox (`nox.json`) so applications
+# compile cleanly on WASM, mobile (`ios-*`, `android-*`), and desktop. Desktop applications wanting
+# C-accelerated zero-copy DOM reads can swap in `yyjson_adapter.YyJsonReader` cleanly.
+
+import nox.json
+from nox.json import JsonValue, JsonError
+import response
+from response import Response
+import errors
+from errors import DecodeError, UnsupportedFeatureError
+import url
+from url import sanitize_url
+
+class JsonDocument:
+    def backend(self: JsonDocument) -> str:
+        return "abstract"
+
+    def is_null(self: JsonDocument) -> bool:
+        return False
+
+    def is_bool(self: JsonDocument) -> bool:
+        return False
+
+    def is_number(self: JsonDocument) -> bool:
+        return False
+
+    def is_string(self: JsonDocument) -> bool:
+        return False
+
+    def is_array(self: JsonDocument) -> bool:
+        return False
+
+    def is_object(self: JsonDocument) -> bool:
+        return False
+
+    def as_bool(self: JsonDocument) -> bool:
+        raise UnsupportedFeatureError("json", "JsonDocument.as_bool is not implemented")
+
+    def as_int(self: JsonDocument) -> int:
+        raise UnsupportedFeatureError("json", "JsonDocument.as_int is not implemented")
+
+    def as_float(self: JsonDocument) -> float:
+        raise UnsupportedFeatureError("json", "JsonDocument.as_float is not implemented")
+
+    def as_str(self: JsonDocument) -> str:
+        raise UnsupportedFeatureError("json", "JsonDocument.as_str is not implemented")
+
+    def has(self: JsonDocument, key: str) -> bool:
+        return False
+
+    def get(self: JsonDocument, key: str) -> JsonDocument:
+        raise UnsupportedFeatureError("json", "JsonDocument.get is not implemented")
+
+    def get_str(self: JsonDocument, key: str) -> str:
+        raise UnsupportedFeatureError("json", "JsonDocument.get_str is not implemented")
+
+    def get_int(self: JsonDocument, key: str) -> int:
+        raise UnsupportedFeatureError("json", "JsonDocument.get_int is not implemented")
+
+    def get_float(self: JsonDocument, key: str) -> float:
+        raise UnsupportedFeatureError("json", "JsonDocument.get_float is not implemented")
+
+    def get_bool(self: JsonDocument, key: str) -> bool:
+        raise UnsupportedFeatureError("json", "JsonDocument.get_bool is not implemented")
+
+    def array_len(self: JsonDocument) -> int:
+        raise UnsupportedFeatureError("json", "JsonDocument.array_len is not implemented")
+
+    def array_get(self: JsonDocument, i: int) -> JsonDocument:
+        raise UnsupportedFeatureError("json", "JsonDocument.array_get is not implemented")
+
+    def dump(self: JsonDocument) -> str:
+        raise UnsupportedFeatureError("json", "JsonDocument.dump is not implemented")
+
+    def dump_pretty(self: JsonDocument, indent: int = 2) -> str:
+        raise UnsupportedFeatureError("json", "JsonDocument.dump_pretty is not implemented")
+
+class NoxJsonDocument(JsonDocument):
+    val: JsonValue
+
+    def __init__(self: NoxJsonDocument, val: JsonValue) -> None:
+        self.val = val
+
+    def backend(self: NoxJsonDocument) -> str:
+        return "nox.json"
+
+    def raw(self: NoxJsonDocument) -> JsonValue:
+        return self.val
+
+    def is_null(self: NoxJsonDocument) -> bool:
+        return nox.json.is_null(self.val)
+
+    def is_bool(self: NoxJsonDocument) -> bool:
+        return nox.json.is_bool(self.val)
+
+    def is_number(self: NoxJsonDocument) -> bool:
+        return nox.json.is_number(self.val)
+
+    def is_string(self: NoxJsonDocument) -> bool:
+        return nox.json.is_string(self.val)
+
+    def is_array(self: NoxJsonDocument) -> bool:
+        return nox.json.is_array(self.val)
+
+    def is_object(self: NoxJsonDocument) -> bool:
+        return nox.json.is_object(self.val)
+
+    def as_bool(self: NoxJsonDocument) -> bool:
+        if not nox.json.is_bool(self.val):
+            raise DecodeError("Expected JSON boolean")
+        return nox.json.read_bool(self.val)
+
+    def as_int(self: NoxJsonDocument) -> int:
+        try:
+            return nox.json.read_int(self.val)
+        except JsonError as e:
+            raise DecodeError("JSON int read failed: " + str(e))
+
+    def as_float(self: NoxJsonDocument) -> float:
+        try:
+            return nox.json.read_float(self.val)
+        except JsonError as e:
+            raise DecodeError("JSON float read failed: " + str(e))
+
+    def as_str(self: NoxJsonDocument) -> str:
+        try:
+            return nox.json.read_str(self.val)
+        except JsonError as e:
+            raise DecodeError("JSON string read failed: " + str(e))
+
+    def has(self: NoxJsonDocument, key: str) -> bool:
+        if not nox.json.is_object(self.val):
+            return False
+        try:
+            _v: JsonValue = nox.json.get(self.val, key)
+            return True
+        except JsonError:
+            return False
+
+    def get(self: NoxJsonDocument, key: str) -> JsonDocument:
+        try:
+            child: JsonValue = nox.json.get(self.val, key)
+            return NoxJsonDocument(child)
+        except JsonError as e:
+            raise DecodeError("JSON object lookup failed for '" + key + "': " + str(e))
+
+    def get_str(self: NoxJsonDocument, key: str) -> str:
+        return self.get(key).as_str()
+
+    def get_int(self: NoxJsonDocument, key: str) -> int:
+        return self.get(key).as_int()
+
+    def get_float(self: NoxJsonDocument, key: str) -> float:
+        return self.get(key).as_float()
+
+    def get_bool(self: NoxJsonDocument, key: str) -> bool:
+        return self.get(key).as_bool()
+
+    def array_len(self: NoxJsonDocument) -> int:
+        if not nox.json.is_array(self.val):
+            raise DecodeError("Expected JSON array")
+        return nox.json.array_len(self.val)
+
+    def array_get(self: NoxJsonDocument, i: int) -> JsonDocument:
+        if not nox.json.is_array(self.val):
+            raise DecodeError("Expected JSON array")
+        n: int = nox.json.array_len(self.val)
+        idx: int = i
+        if idx < 0:
+            idx = idx + n
+        if idx < 0 or idx >= n:
+            raise DecodeError("JSON array index out of range: " + str(i))
+        return NoxJsonDocument(nox.json.array_get(self.val, idx))
+
+    def dump(self: NoxJsonDocument) -> str:
+        return nox.json.dump(self.val)
+
+    def dump_pretty(self: NoxJsonDocument, indent: int = 2) -> str:
+        n: int = indent
+        if n < 0:
+            n = 0
+        return nox.json.dump_pretty(self.val, n)
+
+class JsonReader:
+    def backend(self: JsonReader) -> str:
+        return "abstract"
+
+    def parse(self: JsonReader, raw: str) -> JsonDocument:
+        raise UnsupportedFeatureError("json", "JsonReader.parse is not implemented")
+
+    def parse_response(self: JsonReader, resp: Response) -> JsonDocument:
+        raise UnsupportedFeatureError("json", "JsonReader.parse_response is not implemented")
+
+# Guaranteed pure-Nox fallback JSON reader (`nox.json`).
+class NoxJsonReader(JsonReader):
+    def __init__(self: NoxJsonReader) -> None:
+        pass
+
+    def backend(self: NoxJsonReader) -> str:
+        return "nox.json"
+
+    def parse(self: NoxJsonReader, raw: str) -> JsonDocument:
+        if len(raw) == 0:
+            raise DecodeError("Cannot parse empty payload as JSON")
+        try:
+            v: JsonValue = nox.json.parse(raw)
+            return NoxJsonDocument(v)
+        except JsonError as e:
+            raise DecodeError("Invalid JSON payload: " + str(e))
+
+    def parse_response(self: NoxJsonReader, resp: Response) -> JsonDocument:
+        if len(resp.body) == 0:
+            raise DecodeError("Cannot parse empty response body as JSON")
+        try:
+            v: JsonValue = nox.json.parse(resp.body)
+            return NoxJsonDocument(v)
+        except JsonError as e:
+            raise DecodeError("Invalid JSON in response from " + sanitize_url(resp.url) + ": " + str(e))

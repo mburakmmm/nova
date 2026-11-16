@@ -1,0 +1,170 @@
+# yyjson_adapter.nox — Opt-in desktop high-performance JSON reader backed by `nox.yyjson`.
+#
+# IMPORTANT TARGET BOUNDARY:
+# This module imports `nox.yyjson` (linked from `noxclibs.a` on macOS, Linux, and Windows).
+# Do NOT import this module in WASM (`wasm32-*`) or mobile (`ios-*`, `android-*`) builds;
+# core `nova` / `nova.json_adapter` provides `NoxJsonReader` (`nox.json`) as the pure-Nox fallback.
+
+import nox.yyjson
+from nox.yyjson import YyValue, YyjsonError
+import json_adapter
+from json_adapter import JsonDocument, JsonReader
+import response
+from response import Response
+import errors
+from errors import DecodeError
+import url
+from url import sanitize_url
+
+def is_yyjson_supported() -> bool:
+    return nox.yyjson.is_supported()
+
+class YyJsonDocument(JsonDocument):
+    val: YyValue
+
+    def __init__(self: YyJsonDocument, val: YyValue) -> None:
+        self.val = val
+
+    def backend(self: YyJsonDocument) -> str:
+        return "nox.yyjson"
+
+    def raw(self: YyJsonDocument) -> YyValue:
+        return self.val
+
+    def is_null(self: YyJsonDocument) -> bool:
+        return nox.yyjson.is_null(self.val)
+
+    def is_bool(self: YyJsonDocument) -> bool:
+        return nox.yyjson.is_bool(self.val)
+
+    def is_number(self: YyJsonDocument) -> bool:
+        return nox.yyjson.is_number(self.val)
+
+    def is_string(self: YyJsonDocument) -> bool:
+        return nox.yyjson.is_string(self.val)
+
+    def is_array(self: YyJsonDocument) -> bool:
+        return nox.yyjson.is_array(self.val)
+
+    def is_object(self: YyJsonDocument) -> bool:
+        return nox.yyjson.is_object(self.val)
+
+    def as_bool(self: YyJsonDocument) -> bool:
+        try:
+            return nox.yyjson.read_bool(self.val)
+        except YyjsonError as e:
+            raise DecodeError("JSON bool read failed: " + str(e))
+
+    def as_int(self: YyJsonDocument) -> int:
+        try:
+            return nox.yyjson.read_int(self.val)
+        except YyjsonError as e:
+            raise DecodeError("JSON int read failed: " + str(e))
+
+    def as_float(self: YyJsonDocument) -> float:
+        try:
+            return nox.yyjson.read_float(self.val)
+        except YyjsonError as e:
+            raise DecodeError("JSON float read failed: " + str(e))
+
+    def as_str(self: YyJsonDocument) -> str:
+        try:
+            return nox.yyjson.read_str(self.val)
+        except YyjsonError as e:
+            raise DecodeError("JSON string read failed: " + str(e))
+
+    def has(self: YyJsonDocument, key: str) -> bool:
+        return nox.yyjson.has_key(self.val, key)
+
+    def get(self: YyJsonDocument, key: str) -> JsonDocument:
+        try:
+            child: YyValue = nox.yyjson.get(self.val, key)
+            return YyJsonDocument(child)
+        except YyjsonError as e:
+            raise DecodeError("JSON object lookup failed for '" + key + "': " + str(e))
+
+    def get_str(self: YyJsonDocument, key: str) -> str:
+        try:
+            return nox.yyjson.get_str(self.val, key)
+        except YyjsonError as e:
+            raise DecodeError("JSON string field '" + key + "' failed: " + str(e))
+
+    def get_int(self: YyJsonDocument, key: str) -> int:
+        try:
+            return nox.yyjson.get_int(self.val, key)
+        except YyjsonError as e:
+            raise DecodeError("JSON int field '" + key + "' failed: " + str(e))
+
+    def get_float(self: YyJsonDocument, key: str) -> float:
+        try:
+            return nox.yyjson.get_float(self.val, key)
+        except YyjsonError as e:
+            raise DecodeError("JSON float field '" + key + "' failed: " + str(e))
+
+    def get_bool(self: YyJsonDocument, key: str) -> bool:
+        try:
+            return nox.yyjson.get_bool(self.val, key)
+        except YyjsonError as e:
+            raise DecodeError("JSON bool field '" + key + "' failed: " + str(e))
+
+    def array_len(self: YyJsonDocument) -> int:
+        if not nox.yyjson.is_array(self.val):
+            raise DecodeError("Expected JSON array")
+        return nox.yyjson.array_len(self.val)
+
+    def array_get(self: YyJsonDocument, i: int) -> JsonDocument:
+        if not nox.yyjson.is_array(self.val):
+            raise DecodeError("Expected JSON array")
+        try:
+            return YyJsonDocument(nox.yyjson.array_get(self.val, i))
+        except YyjsonError as e:
+            raise DecodeError("JSON array access failed: " + str(e))
+        except IndexError as ie:
+            raise DecodeError("JSON array index out of range: " + str(ie))
+
+    def dump(self: YyJsonDocument) -> str:
+        try:
+            return nox.yyjson.dump(self.val)
+        except YyjsonError as e:
+            raise DecodeError("JSON serialize failed: " + str(e))
+
+    def dump_pretty(self: YyJsonDocument, indent: int = 2) -> str:
+        try:
+            return nox.yyjson.dump_pretty(self.val, indent)
+        except YyjsonError as e:
+            raise DecodeError("JSON pretty serialize failed: " + str(e))
+
+def _open_yy_value(raw: str, relaxed: bool, json5: bool, context: str) -> YyValue:
+    if len(raw) == 0:
+        raise DecodeError("Cannot parse empty " + context + " as JSON")
+    try:
+        if json5:
+            return nox.yyjson.parse_json5(raw)
+        if relaxed:
+            return nox.yyjson.parse_relaxed(raw)
+        return nox.yyjson.parse(raw)
+    except YyjsonError as e:
+        raise DecodeError("Invalid JSON " + context + " (yyjson): " + str(e))
+
+class YyJsonReader(JsonReader):
+    relaxed: bool
+    json5: bool
+
+    def __init__(self: YyJsonReader, relaxed: bool = False, json5: bool = False) -> None:
+        self.relaxed = relaxed
+        self.json5 = json5
+
+    def backend(self: YyJsonReader) -> str:
+        return "nox.yyjson"
+
+    def parse(self: YyJsonReader, raw: str) -> JsonDocument:
+        return YyJsonDocument(_open_yy_value(raw, self.relaxed, self.json5, "payload"))
+
+    def parse_response(self: YyJsonReader, resp: Response) -> JsonDocument:
+        return YyJsonDocument(_open_yy_value(resp.body, self.relaxed, self.json5, "in response from " + sanitize_url(resp.url)))
+
+def parse_yyjson(raw: str, relaxed: bool = False, json5: bool = False) -> YyJsonDocument:
+    return YyJsonDocument(_open_yy_value(raw, relaxed, json5, "payload"))
+
+def parse_yyjson_response(resp: Response, relaxed: bool = False, json5: bool = False) -> YyJsonDocument:
+    return YyJsonDocument(_open_yy_value(resp.body, relaxed, json5, "in response from " + sanitize_url(resp.url)))
