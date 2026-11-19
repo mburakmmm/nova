@@ -247,6 +247,26 @@ from nova import RetryPolicy
 - `Client.stream()` now follows redirects (with cross-origin `Authorization`/`Cookie` stripping and intermediate stream closure), retries transient failures, extracts `Set-Cookie`, and guarantees `StreamResponse.close()` if `raise_for_status()` throws.
 - `UploadStream.finish()` / `finish_stream()` now synchronize `Set-Cookie` into `Client.cookies`, apply `Client.content_decoder` (e.g. `BrotliDecoder`), and close the stream deterministically on exceptions.
 
-### SSRF & Idempotent Retry Hardening
+### SSRF & idempotent retry hardening
 - `SSRFPolicy.set_require_dns_or_allowlist(enabled=True)` and `create_safe_client(..., require_dns_or_allowlist=False)` / `nova.safe_client(..., require_dns_or_allowlist=False)`.
 - `RetryPolicy(..., retry_put_delete=True)` — retries RFC 9110 idempotent `PUT` and `DELETE` methods alongside `GET`/`HEAD`/`OPTIONS` by default (`POST` remains opt-in).
+
+---
+
+## v0.8.0 additions (Nox v2.2.38 Parity)
+
+### SSRF IP Pinning, `NoxDnsResolver` & Custom CA TLS
+- `NoxDnsResolver(timeout_ms=3000, doh_url="")` — `HostResolver` backed by `nox.dns.resolve` (`SSRFSecurityError` chains underlying `DnsError` cause).
+- `SSRFPolicy.set_pin_resolved_ip(enabled=True) -> SSRFPolicy`, `SSRFPolicy.validate_and_pin(target_url) -> str` — resolves, canonicalizes, and pins verified `connect_ip` on `Request` (initial hop and every redirect hop).
+- `Client.set_ca_file(ca_path: str) -> Client` — strict custom PEM CA bundle for buffered requests (never disables hostname/cert verification; `stream()`/`stream_upload()` raise `UnsupportedFeatureError`).
+- `Client.set_allow_https_downgrade(allow: bool = True) -> Client` — `create_safe_client` / `nova.safe_client` set `allow_https_downgrade=False` (`use_system_dns=True`, `pin_dns=True`) by default to block `https -> http` redirect downgrades.
+
+### Per-Client Private Connection Pools & Lifecycle (`nox.http.Pool`)
+- `Client.enable_private_pool(max_idle=32, idle_timeout_ms=90000) -> Client` — isolates connections into an independent per-Client `nox.http.Pool` (`Client.connection_pool_scope()` returns `"client"`).
+- `Client.close() -> None`, `Client.__enter__() -> Client`, `Client.__exit__() -> None` (`with Client(...) as cli:`).
+
+### Lazy Stream Generators (`Iterator[str]`) & Zero-Alloc JSON Cursors
+- `StreamResponse.lines() -> Iterator[str]` and `StreamResponse.chunks(chunk_size=4096) -> Iterator[str]` — lazy `yield` generators (`for line in stream.lines():`).
+- `NoxJsonDocument` internally uses `nox.json.pos_*` cursor APIs (`pos_find`, `pos_kind`, `pos_str`, `pos_int`, `pos_number`, `pos_bool`, `pos_len`, `pos_at`, `pos_dump`) for faster pure-Nox JSON parsing/traversal across Desktop, WASM, and mobile.
+- Error cause preservation via `raise ... from e` (`Exception.cause`) across `TransportAdapter`, `UploadStream`, `NoxDnsResolver`, `NoxJsonDocument`, `NoxJsonReader`, `BrotliDecoder`, and `YyJsonDocument`/`YyJsonReader`.
+- Compile-time `__all__` API hygiene enforced on internal modules (`ssrf`, `url`, `headers`, `cookies`, `psl`).

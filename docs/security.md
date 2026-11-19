@@ -69,39 +69,39 @@ Hosts are parsed with a real parser — **not** string prefixes:
 - Ranges: loopback, unspecified, link-local (`169.254/16`, `fe80::/10`), private (RFC 1918, CGNAT, `fc00::/7`, site-local), documentation/benchmark ranges, multicast/reserved, Teredo.
 - A hostname such as `fc.example.com` / `fe80.example.com` is never mistaken for an IPv6 literal.
 
-### Layer 3 — DNS-resolution validation (v0.6.0 / v0.6.1)
+### Layer 3 — DNS-resolution validation & verified IP pinning (v0.6.0–v0.8.0)
 A hostname can resolve to a private address (or flip between public and private — DNS rebinding). Nova provides:
+- `NoxDnsResolver(timeout_ms=3000, doh_url="")` — `HostResolver` backed by `nox.dns.resolve` (system `getaddrinfo` on desktop/mobile; explicit `doh_url` on WASM).
 - `SSRFPolicy.set_resolver(HostResolver)` — hostnames are resolved and **every** returned IP is validated; invalid output or an empty answer is rejected (**fail-closed**).
+- `SSRFPolicy.set_pin_resolved_ip(True)` & `SSRFPolicy.validate_and_pin(url)` — pins the canonical verified IP onto `Request.connect_ip` (`nox.http.request(..., connect_ip=...)`) on buffered requests and every redirect hop, eliminating DNS-rebinding TOCTOU while keeping TLS SNI and certificate hostname verification on the original hostname. (`stream()` / `stream_upload()` raise `UnsupportedFeatureError` when `pin_resolved_ip` is active because stdlib streaming lacks `connect_ip`.)
 - `SSRFPolicy.skip_dns_for_allowlist` (`bool`, default `False`) — when a resolver is configured, allowlisted hostnames also have their resolved IPs validated against private/loopback/metadata ranges, preventing DNS rebinding attacks on allowlisted partner domains. Use `set_skip_dns_for_allowlist(True)` only for internal names intentionally pointing to private IPs.
 - `SSRFPolicy.validate_resolved(url, host, ips)` — public API for callers that own a resolver.
 - `SSRFPolicy.set_require_dns_or_allowlist(True)` — fail-closed mode when no `HostResolver` is attached: rejects arbitrary unverified hostnames unless they resolve via a `HostResolver` or appear in the explicit allowlist.
-- `SSRFPolicy.set_strict_hostnames(True)` — only IP literals and explicitly allow-listed hostnames pass. **This is the strongest mode available today** and is recommended for untrusted URLs.
+- `SSRFPolicy.set_strict_hostnames(True)` — only IP literals and explicitly allow-listed hostnames pass.
 
-### Layer 4 — Safe Client Factory (`nova.safe_client()`) (v0.6.1 / v0.6.2 / v0.7.1)
+### Layer 4 — Safe Client Factory (`nova.safe_client()`) (v0.6.1–v0.8.0)
 For applications that fetch user-supplied URLs (crawlers, webhooks, proxies), `create_safe_client()` / `nova.safe_client()` returns a pre-hardened `Client`:
-- Active `SSRFPolicy()` (blocks private, loopback, and link-local ranges by default)
-- Optional `resolver: HostResolver | None = None` parameter to plug DNS validation
-- Optional `require_dns_or_allowlist: bool = False` fail-closed guard when no resolver is supplied
+- Active `SSRFPolicy()` with `NoxDnsResolver(timeout_ms)` + `pin_resolved_ip = True` enabled by default (`use_system_dns=True`, `pin_dns=True`)
+- `allow_https_downgrade = False` (blocks `https://` -> `http://` redirect downgrades with `SSRFSecurityError`)
+- Optional `resolver: HostResolver | None = None` parameter to plug custom DNS validation (`StaticResolver` / custom subclass)
+- Optional `require_dns_or_allowlist: bool = False` fail-closed guard when disabling system DNS
 - `raise_for_status = True` (fails loudly on 4xx / 5xx)
 - `timeout_ms = 15000` (bounded request timeout prevents slowloris hangs)
 - `max_redirects = 3` (tight redirect limit against loops)
 
 > [!NOTE]
-> **Safe Client Boundary**: When no `resolver` is supplied and `require_dns_or_allowlist=False`, `safe_client()` screens raw IP literals, loopbacks, and known cloud metadata, but does not perform DNS resolution for arbitrary public hostnames. Pass a `HostResolver` or set `require_dns_or_allowlist=True` / `policy.set_strict_hostnames(True)` for untrusted URLs.
+> **Custom CA TLS Verification (`Client.set_ca_file`)**: For internal enterprise CAs or deterministic local TLS tests, `Client.set_ca_file(path)` delegates strict PEM CA verification to `nox.http.request(..., ca_file=...)` on buffered requests while preserving full hostname checks (no `verify=False` mode is ever exposed). `stream()` and `stream_upload()` fail explicitly with `UnsupportedFeatureError` if `ca_file` is configured.
 
-> [!WARNING]
-> Nox has no built-in DNS API and the runtime resolves the hostname again when connecting, so a **TOCTOU / DNS-rebinding window remains** when you rely on a resolver. Closing it requires connecting to the validated IP while verifying TLS against the original hostname — a Nox runtime feature (`NOX_LIMITATIONS.md` §14). Until then use `strict_hostnames` (or an allowlist) for untrusted input.
+## 11. Cross-Origin Redirects: Credential & Cookie Stripping (v0.6.0 / v0.8.0)
 
-## 11. Cross-Origin Redirects: Credential & Cookie Stripping (v0.6.0)
+On a cross-origin hop (scheme, host or port differs — including `https → http`), Nova strips `Authorization`, `Proxy-Authorization` **and `Cookie`** — including a `Cookie` header you set manually on the client. `create_safe_client()` / `set_allow_https_downgrade(False)` blocks `https → http` redirect downgrades outright with `SSRFSecurityError`. Cookies from an enabled `CookieJar` are re-applied *for the new URL only*.
 
-On a cross-origin hop (scheme, host or port differs — including `https → http`), Nova strips `Authorization`, `Proxy-Authorization` **and `Cookie`** — including a `Cookie` header you set manually on the client. Cookies from an enabled `CookieJar` are then re-applied *for the new URL only*. Covered by a real `Client.send()` redirect flow in `tests/unit/redirect_security_test.nox`.
-
-## 12. Cookie Expiry, Public Suffixes, Multiple Set-Cookie (v0.6.0 / v0.6.2)
+## 12. Cookie Expiry, Public Suffixes, Multiple Set-Cookie (v0.6.0 / v0.8.0)
 
 - `Expires` (IMF-fixdate / RFC 850 / asctime) and `Max-Age` (precedence over `Expires`); `Max-Age<=0` or a past `Expires` deletes the stored cookie; expired cookies are never sent.
 - Public-suffix rejection embeds the **full official Mozilla Public Suffix List** (`8,692` exact + `314` wildcard `*.` + `8` exception `!` prevailing rules) and provides `scripts/update_psl.py --apply` for automated updates, alongside runtime `CookieJar.add_public_suffix()` (including wildcard and exception rules). A host that *is* a public suffix may only set host-only cookies.
 - RFC 6265 default-path, `SameSite` recorded.
-- Multiple `Set-Cookie` values are supported when separated by `\n` (Nox's convention, `Headers.set_multi/get_all`). **The current Nox client runtime delivers only one `Set-Cookie` per response** (`NOX_LIMITATIONS.md` §16).
+- Multiple `Set-Cookie` headers delivered `\n`-joined by `nox.http` (`v2.1.195+`) are extracted cleanly into `Headers.get_all("Set-Cookie")` and stored as separate cookies by `CookieJar` (`tests/integration/multi_set_cookie_test.nox`).
 
 ## 13. Lazy Streaming & UTF-8 Byte-Bound Memory (v0.6.0 / v0.6.2)
 

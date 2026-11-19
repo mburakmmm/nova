@@ -132,41 +132,36 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
 ---
 
 ## 14. DNS Çözümleme API'si ve Doğrulanmış IP'ye Bağlanma (SSRF / DNS Rebinding)
-- **Durum:** ⚠️ **AÇIK — Nox çalışma zamanı özelliği gerekli (P0 güvenlik)**
-- **Detay:** Nox stdlib'de bir DNS çözümleme fonksiyonu (`nox.net.resolve` benzeri) yoktur ve `nox.http` bağlanırken hostname'i kendisi tekrar çözer. Bu yüzden Nova, çözümlenmiş IP'yi doğrulasa bile bağlantı **o IP'ye** yapılmaz → DNS rebinding (TOCTOU) penceresi açık kalır.
-- **Önerilen Nox değişikliği:**
-  1. `nox.net.resolve(host: str) -> list[str]` (A/AAAA).
-  2. `nox.http` isteklerine `connect_ip: str` (veya bir `pre_connect` doğrulama kancası): doğrulanmış IP'ye bağlan, TLS SNI + sertifika/hostname doğrulamasını **orijinal hostname** üzerinden yap.
-  3. Ortak `nox.net.ip` (IPv4/IPv6 ayrıştırma + sınıflandırma): Nova'nın `ssrf.nox` parser'ı bunun için referans olabilir; Cipher / Sentinel gibi kütüphaneler tekrar yazmak zorunda kalmaz.
-- **Nova'daki karşılığı (v0.6.0 / v0.6.1 / v0.6.2):**
-  - `HostResolver` arayüzü + `SSRFPolicy.set_resolver()` (tüm IP'ler doğrulanır, fail-closed).
-  - `SSRFPolicy.set_strict_hostnames(True)` (en güçlü mevcut mod).
-  - `SSRFPolicy.skip_dns_for_allowlist` (varsayılan: `False`): Beyaz listedeki host adları dahi bir çözümleyici tanımlıysa DNS çözümlemesinden geçirilerek özel/loopback/metadata IP'lerine yönlenip yönlenmedikleri denetlenir.
-  - `create_safe_client(resolver=...)` / `nova.safe_client(resolver=...)` fabrika fonksiyonları ile güvenilmeyen URL'ler için varsayılan olarak SSRF korumalı, 15s zaman aşımlı, sıkı yönlendirme sınırlı ve opsiyonel `HostResolver` destekli istemci oluşturulması.
+- **Durum:** ✅ **ÇÖZÜLDÜ (Nox v2.1.195 + v2.2.4 / Nova v0.8.0)** *(tamponlu HTTP/HTTPS istekleri için; akışlı `stream()`/`stream_upload()` hâlâ açık)*
+- **Uygulama (`v2.1.195+`):**
+  - `nox.dns.resolve(host, timeout_ms, doh_url)` ve `nox.ip` (`is_valid`, `parse`) standart kütüphaneye eklendi (WASM'da açık `doh_url` desteğiyle).
+  - `nox.http.request(..., connect_ip=..., ca_file=...)` bağlanma hedefini doğrulanmış IP'ye sabitlerken TLS SNI ve sertifika/hostname doğrulamasını **orijinal ana makine adı** üzerinden yapar.
+- **Nova Entegrasyonu (v0.8.0):**
+  - `NoxDnsResolver(timeout_ms, doh_url)` (`nox.dns.resolve` tabanlı `HostResolver`).
+  - `SSRFPolicy.set_pin_resolved_ip(True)` ve `SSRFPolicy.validate_and_pin()`: hem ilk istek hem de her yönlendirme (redirect) adımında IP kanonikleştirme + doğrulama + `Request.connect_ip` sabitlemesi.
+  - `create_safe_client()` / `nova.safe_client()` varsayılan olarak `NoxDnsResolver` + `pin_resolved_ip=True` + `allow_https_downgrade=False` ile başlar.
+  - **Açık kalan sınır:** `nox.http.stream()` ve `nox.http.stream_upload()` `connect_ip` almadığından Nova bu iki çağrıda `pin_resolved_ip` etkinken sessizce düşmek yerine açıkça `UnsupportedFeatureError("connect_ip", ...)` fırlatır.
 
 ---
 
 ## 15. Tembel (Lazy) İteratör / Generator Desteği
-- **Durum:** ⚠️ **AÇIK — dil özelliği**
-- **Detay:** Nox'ta `for x in obj.iter_lines():` ile tüketilebilen tembel iteratör/generator protokolü yoktur; metotlar `list[...]` döndürmek zorundadır (tüm veri belleğe alınır).
-- **Önerilen Nox değişikliği:** `__iter__`/`__next__` protokolü veya `yield`.
-- **Nova'daki karşılığı (v0.6.0):** `StreamResponse.read_line()` (pull) ve callback sınıfları `LineHandler` / `ChunkHandler` ile `for_each_line` / `for_each_chunk` (sınırlı bellek).
+- **Durum:** ✅ **ÇÖZÜLDÜ (Nox v2.2.x `Iterator[T]` + `yield` / Nova v0.8.0)**
+- **Uygulama:** Derleyici `def ... -> Iterator[str]: ... yield ...` generator fonksiyonlarını/metotlarını Masaüstü ve `wasm32-*` hedeflerinde tam desteklemektedir.
+- **Nova Entegrasyonu (v0.8.0):** `StreamResponse.lines() -> Iterator[str]` ve `StreamResponse.chunks(chunk_size=4096) -> Iterator[str]` eklendi; böylece `for line in stream.lines():` doğrudan tembel ve sınırlı bellekli tüketim sunar (`read_line` / `LineHandler` / `ChunkHandler` geriye dönük uyumlu korunur).
 
 ---
 
 ## 16. Yinelenen Yanıt Başlıkları (Birden Çok `Set-Cookie`)
-- **Durum:** ⚠️ **AÇIK — runtime hatası/eksiği (P1 upstream)**
-- **Detay:** Canlı doğrulandı: `httpbin.org/cookies/set?a=1&b=2` iki `Set-Cookie` döndürür, ancak `nox.http` istemcisinin `HttpResponse.headers: dict[str, str]` alanında yalnızca **sonuncusu** (`b=2`) kalır; `a=1` kaybolur. (Sunucu tarafı için `nox.http.multi` `\n` ile birleştirir; istemci tarafı simetrik değildir.)
-- **Önerilen Nox değişikliği:** İstemci yanıtında yinelenen başlıkları `nox.http.multi` ile aynı `\n` kuralıyla birleştirmek (veya `HttpResponse.header_list: list[tuple[str,str]]`).
-- **Nova'daki karşılığı (v0.6.0):** `Headers.set_multi/get_all`, `response_headers_from_dict` ve `CookieJar` çoklu `Set-Cookie` değerlerini `\n` ile destekler; runtime düzelince ek değişiklik gerekmez.
+- **Durum:** ✅ **ÇÖZÜLDÜ (Nox v2.1.195 / Nova v0.8.0)**
+- **Uygulama:** `nox.http` istemcisi yinelenen yanıt başlıklarını (`Set-Cookie` dahil) sunucudaki `nox.http.multi` ile simetrik biçimde `\n` ayırıcısıyla birleştirerek `HttpResponse.headers` içinde döndürür.
+- **Nova Entegrasyonu (v0.8.0):** `Headers.get_all()`, `response_headers_from_dict()` ve `CookieJar.extract_from_response()` uçtan uca yerel sunucu testiyle (`tests/integration/multi_set_cookie_test.nox`) doğrulandı.
 
 ---
 
 ## 17. Client'a Özel (Per-Client) Bağlantı Havuzu
-- **Durum:** ⚠️ **AÇIK — runtime tasarımı**
-- **Detay:** `nox.http.client_pool(max_idle, idle_timeout_ms)` **süreç geneli**dir. Bir `Client` üzerindeki `set_connection_pool()` bütün süreci etkiler (bağlantılar origin başına ayrı tutulur).
-- **Önerilen Nox değişikliği:** `nox.http.Pool` nesnesi (`pool.request(...)` / `request(..., pool=p)`).
-- **Nova'daki karşılığı (v0.6.0):** API dokümantasyonunda kapsam açıkça "process"; `Client.connection_pool_scope()`.
+- **Durum:** ✅ **ÇÖZÜLDÜ (Nox v2.2.1 `nox.http.Pool` / Nova v0.8.0)**
+- **Uygulama:** `nox.http.new_pool(max_idle, idle_timeout_ms)` ile `Pool.request()`, `Pool.idle_connections()`, `Pool.close()` standart kütüphaneye eklendi (`connect_ip`/`ca_file` verilen istekler güvenlik gereği havuzu atlar).
+- **Nova Entegrasyonu (v0.8.0):** `Client.enable_private_pool(max_idle, idle_timeout_ms)` (`connection_pool_scope() == "client"`), `Client.close()`, ve `with Client(...) as cli:` context manager yaşam döngüsü (`tests/integration/private_pool_test.nox`) eklendi. `set_connection_pool()` geriye dönük uyumluluk için `"process"` kapsamını korur.
 
 ---
 
@@ -198,10 +193,10 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
 
 ---
 
-## 22. İstemci Tarafında Özel CA / Sertifika Güvenliği (`nox.http` HTTP/3 Yerel Test Sınırı)
-- **Durum:** ⚠️ **AÇIK (v0.8.0 Runtime Yol Haritası)**
-- **Detay:** `nox.http.serve_tls` kendi imzalı test sertifikasıyla dinleme açabilse de, macOS ve Windows'ta `std.http.Client` CA doğrulaması için yalnızca işletim sistemi güven deposunu okur (`SSL_CERT_FILE` yok sayılır). Güvenlik ilkesi gereği sertifika doğrulaması kapatılamadığından, yerel bir TLS+QUIC (`Alt-Svc: h3`) sunucusuna karşı platformlar-arası deterministik HTTP/3 loopback testi ancak `nox.http` istemcisine özel bir `ca_bundle` parametresi eklendiğinde çalışabilir.
-- **Nova'daki karşılığı:** HTTP/3 toggle'ı ve HTTP/1.1 şeffaf fallback davranışı test edilmiştir; gerçek protokol seviyesi QUIC/HTTP3 el sıkışma entegrasyon testi v0.8.0 runtime entegrasyonuna planlanmıştır.
+## 22. İstemci Tarafında Özel CA / Sertifika Güvenliği ve Yerel HTTP/3 QUIC Sınırı
+- **Durum:** ✅ **TCP TLS (`ca_file`) ÇÖZÜLDÜ (Nox v2.1.195 / Nova v0.8.0)** / ⚠️ **HTTP/3 QUIC özel CA desteği bekliyor**
+- **Uygulama:** `nox.http.request(..., ca_file=...)` sistem deposu yerine belirtilen PEM CA dosyasına sıkı sertifika + hostname doğrulaması yapar (`verify=False` asla sunulmaz). Nova `Client.set_ca_file(path)` ile yerel `serve_tls` sunucusuna karşı doğrulamalı HTTPS GET/POST ve `connect_ip` SNI sabitlemesi `tests/integration/tls_custom_ca_connect_ip_test.nox` içinde doğrulanmıştır.
+- **Kalan sınır:** `nox.http` HTTP/3 QUIC yolu (`ca_file.len == 0` koşulu) ve `stream()`/`stream_upload()` henüz `ca_file` parametresi almadığından özel CA ile HTTP/3 QUIC loopback el sıkışması ve akışlı özel-CA istekleri gelecek çalışma zamanı genişlemesine bırakılmıştır (`UnsupportedFeatureError` ile açıkça reddedilir).
 
 ---
 
@@ -220,12 +215,13 @@ Bu belge, **Nova HTTP Client** geliştirme sürecinde tespit edilen ve Nox çal�
 | Yerel Soket Akışı (Streaming) | `v2.0.69` | ✅ ÇÖZÜLDÜ | `StreamResponse` + `with client.stream()` |
 | Akışlı Yükleme (`stream_upload`) | `v2.0.152` | ✅ ÇÖZÜLDÜ | `UploadStream` + `client.stream_upload()` |
 | HTTP/3 (`Alt-Svc` + TCP fallback) | `v2.1.116` | ✅ ÇÖZÜLDÜ | `client.set_http3()` / `nova.set_http3()` |
-| Bağlantı Havuzu (Connection Pool) | `v2.0.126` | ✅ ÇÖZÜLDÜ | `client.set_connection_pool()` |
+| Bağlantı Havuzu (Process Pool) | `v2.0.126` | ✅ ÇÖZÜLDÜ | `client.set_connection_pool()` |
+| Client'a Özel Havuz (`nox.http.Pool`) | `v2.2.1` | ✅ ÇÖZÜLDÜ | `client.enable_private_pool()`, `with Client()` |
 | Proxy Tünelleme | `v2.0.129` | ✅ ÇÖZÜLDÜ | `HTTP_PROXY`, `HTTPS_PROXY` şeffaf tünelleme |
 | Büyük Dosya Transferi | `v2.0.69` | ✅ ÇÖZÜLDÜ | `nova.transfer` (`download_file`/`upload_file`) |
 | `noxclibs` (Brotli / yyjson) WASM+Mobil Sınırı | `v2.1.175` | ✅ KORUMALI | Çekirdek saf Nox fallback + masaüstü opt-in modülleri |
 | FFI Argümanında Heap Geçicisi | — | ⚠️ AÇIK (Workaround var) | Yerel değişkene atama kuralı |
-| DNS çözümleme + IP'ye bağlanma | — | ⚠️ AÇIK (P0) | `HostResolver`, `strict_hostnames` |
-| Tembel iteratör | — | ⚠️ AÇIK | `read_line`, `for_each_line` |
-| Yinelenen yanıt başlıkları | — | ⚠️ AÇIK | `Headers.set_multi`, `\n` kuralı |
-| Client'a özel havuz | — | ⚠️ AÇIK | Kapsam belgelendi (`process`) |
+| DNS çözümleme + IP (`connect_ip` + `nox.dns`) | `v2.1.195` | ✅ ÇÖZÜLDÜ (tamponlu) | `NoxDnsResolver`, `pin_resolved_ip`, `connect_ip` (`stream` hariç) |
+| Tembel iteratör (`Iterator[str]`) | `v2.2.x` | ✅ ÇÖZÜLDÜ | `StreamResponse.lines()` / `chunks()` (`yield`) |
+| Yinelenen yanıt başlıkları | `v2.1.195` | ✅ ÇÖZÜLDÜ | `\n` birleşimli çoklu `Set-Cookie` canlı/yerel doğrulandı |
+| Özel PEM CA (`ca_file`) | `v2.1.195` | ✅ ÇÖZÜLDÜ (TCP TLS) | `Client.set_ca_file()` (akışlı ve QUIC HTTP/3 hariç) |

@@ -1,0 +1,110 @@
+# tests/unit/stream_generators_and_causes_test.nox — Unit tests for Iterator[str] stream generators, zero-alloc NoxJsonDocument cursors, Exception.cause chaining, and Client private pool lifecycle.
+
+import nox.test
+import client
+from client import Client
+import mock_transport
+from mock_transport import MockTransport
+import transport
+from transport import TransportAdapter
+import request
+from request import Request
+import response
+from response import Response
+import headers
+from headers import Headers
+import stream
+from stream import StreamResponse
+import json_adapter
+from json_adapter import NoxJsonReader, JsonDocument
+import errors
+from errors import DecodeError, TransportError
+
+# 1. StreamResponse.lines() lazy Iterator[str] generator
+mt: MockTransport = MockTransport()
+mt.add_response(200, "alpha\r\nbeta\n\ngamma", {})
+cli: Client = Client("https://stream.example.com")
+cli.set_transport(mt)
+
+sr1: StreamResponse = cli.stream("GET", "/lines")
+collected_lines: list[str] = []
+for ln in sr1.lines():
+    collected_lines.append(ln)
+sr1.close()
+
+nox.test.assert_eq_int(len(collected_lines), 4, "lines() yields 4 lines including empty line")
+nox.test.assert_eq_str(collected_lines[0], "alpha", "first line CRLF trimmed")
+nox.test.assert_eq_str(collected_lines[1], "beta", "second line LF trimmed")
+nox.test.assert_eq_str(collected_lines[2], "", "third line empty preserved")
+nox.test.assert_eq_str(collected_lines[3], "gamma", "fourth EOF line preserved")
+
+# 2. StreamResponse.lines() enforces max_line_bytes mid-iteration
+mt.add_response(200, "ok\nthis-line-is-too-long\nnext", {})
+sr2: StreamResponse = cli.stream("GET", "/limit")
+sr2.max_line_bytes = 8
+limit_lines: list[str] = []
+line_limit_err: bool = False
+try:
+    for ln2 in sr2.lines():
+        limit_lines.append(ln2)
+except DecodeError as de:
+    line_limit_err = True
+sr2.close()
+nox.test.assert_true(line_limit_err, "lines() enforces max_line_bytes mid-iteration")
+nox.test.assert_eq_int(len(limit_lines), 1, "first short line yielded before oversized line")
+nox.test.assert_eq_str(limit_lines[0], "ok", "yielded short line value matches")
+
+# 3. StreamResponse.chunks(chunk_size) lazy Iterator[str] generator
+mt.add_response(200, "abcdefghij", {})
+sr3: StreamResponse = cli.stream("GET", "/chunks")
+collected_chunks: list[str] = []
+for ch in sr3.chunks(4):
+    collected_chunks.append(ch)
+sr3.close()
+nox.test.assert_eq_int(len(collected_chunks), 3, "chunks(4) splits 10 bytes into 3 chunks")
+nox.test.assert_eq_str(collected_chunks[0], "abcd", "chunk 0 matches")
+nox.test.assert_eq_str(collected_chunks[1], "efgh", "chunk 1 matches")
+nox.test.assert_eq_str(collected_chunks[2], "ij", "final remainder chunk matches")
+
+# 4. NoxJsonDocument cursor operations & DecodeError.cause preservation
+reader: NoxJsonReader = NoxJsonReader()
+doc: JsonDocument = reader.parse("{\"name\":\"nova\",\"ver\":8,\"pi\":3.5,\"ok\":true,\"meta\":{\"tier\":\"core\"},\"tags\":[\"http\",\"wasm\"]}")
+nox.test.assert_eq_str(doc.get_str("name"), "nova", "cursor get_str")
+nox.test.assert_eq_int(doc.get_int("ver"), 8, "cursor get_int")
+nox.test.assert_true(doc.get_float("pi") > 3.4, "cursor get_float")
+nox.test.assert_true(doc.get_bool("ok"), "cursor get_bool")
+nox.test.assert_true(doc.has("meta"), "cursor has existing key")
+nox.test.assert_true(not doc.has("missing"), "cursor has returns false for missing key")
+meta_doc: JsonDocument = doc.get("meta")
+nox.test.assert_eq_str(meta_doc.get_str("tier"), "core", "cursor nested get + get_str")
+tags_doc: JsonDocument = doc.get("tags")
+nox.test.assert_eq_int(tags_doc.array_len(), 2, "cursor array len")
+nox.test.assert_eq_str(tags_doc.array_get(0).dump(), "\"http\"", "cursor array get + dump")
+
+json_cause_caught: bool = False
+try:
+    _bad_doc: JsonDocument = reader.parse("{not valid json")
+except DecodeError as je:
+    json_cause_caught = True
+    nox.test.assert_true(len(je.cause) > 0, "DecodeError preserves underlying JsonError cause")
+nox.test.assert_true(json_cause_caught, "NoxJsonReader raises DecodeError with cause on malformed JSON")
+
+# 5. TransportAdapter chains underlying HttpError cause onto TransportError
+ta: TransportAdapter = TransportAdapter()
+tr_cause_caught: bool = False
+try:
+    _bad_resp: Response = ta.execute(Request("GET", "http://127.0.0.1:1/unreachable", Headers(), "", 500))
+except TransportError as te:
+    tr_cause_caught = True
+    nox.test.assert_true(len(te.cause) > 0, "TransportError preserves underlying HttpError cause")
+nox.test.assert_true(tr_cause_caught, "TransportAdapter preserves error cause on connection refusal")
+
+# 6. Client private pool scope & context-manager lifecycle
+with Client("https://example.com") as scoped_cli:
+    nox.test.assert_eq_str(scoped_cli.connection_pool_scope(), "process", "default pool scope is process")
+    scoped_cli.enable_private_pool(8, 30000)
+    nox.test.assert_eq_str(scoped_cli.connection_pool_scope(), "client", "enabled private pool scope is client")
+    nox.test.assert_eq_int(scoped_cli.get_idle_connections(), 0, "fresh private pool starts with 0 idle connections")
+nox.test.assert_eq_str(scoped_cli.connection_pool_scope(), "process", "closing private pool via with resets scope to process")
+
+print("stream_generators_and_causes_test passed")

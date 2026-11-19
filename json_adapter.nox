@@ -79,58 +79,94 @@ class JsonDocument:
 
 class NoxJsonDocument(JsonDocument):
     val: JsonValue
+    pos: int
 
-    def __init__(self: NoxJsonDocument, val: JsonValue) -> None:
+    def __init__(self: NoxJsonDocument, val: JsonValue, pos: int = -1) -> None:
         self.val = val
+        if pos >= 0:
+            self.pos = pos
+        elif val.tpos > 0:
+            self.pos = val.tpos - 1
+        else:
+            self.pos = -1
 
     def backend(self: NoxJsonDocument) -> str:
         return "nox.json"
 
     def raw(self: NoxJsonDocument) -> JsonValue:
+        if self.pos >= 0:
+            return nox.json.pos_value(self.val, self.pos)
         return self.val
 
     def is_null(self: NoxJsonDocument) -> bool:
+        if self.pos >= 0:
+            return nox.json.pos_kind(self.val, self.pos) == 0
         return nox.json.is_null(self.val)
 
     def is_bool(self: NoxJsonDocument) -> bool:
+        if self.pos >= 0:
+            return nox.json.pos_kind(self.val, self.pos) == 1
         return nox.json.is_bool(self.val)
 
     def is_number(self: NoxJsonDocument) -> bool:
+        if self.pos >= 0:
+            return nox.json.pos_kind(self.val, self.pos) == 2
         return nox.json.is_number(self.val)
 
     def is_string(self: NoxJsonDocument) -> bool:
+        if self.pos >= 0:
+            return nox.json.pos_kind(self.val, self.pos) == 3
         return nox.json.is_string(self.val)
 
     def is_array(self: NoxJsonDocument) -> bool:
+        if self.pos >= 0:
+            return nox.json.pos_kind(self.val, self.pos) == 4
         return nox.json.is_array(self.val)
 
     def is_object(self: NoxJsonDocument) -> bool:
+        if self.pos >= 0:
+            return nox.json.pos_kind(self.val, self.pos) == 5
         return nox.json.is_object(self.val)
 
     def as_bool(self: NoxJsonDocument) -> bool:
-        if not nox.json.is_bool(self.val):
-            raise DecodeError("Expected JSON boolean")
-        return nox.json.read_bool(self.val)
+        try:
+            if self.pos >= 0:
+                return nox.json.pos_bool(self.val, self.pos)
+            if not nox.json.is_bool(self.val):
+                raise DecodeError("Expected JSON boolean")
+            return nox.json.read_bool(self.val)
+        except JsonError as e:
+            raise DecodeError("JSON bool read failed: " + str(e)) from e
 
     def as_int(self: NoxJsonDocument) -> int:
         try:
+            if self.pos >= 0:
+                return nox.json.pos_int(self.val, self.pos)
             return nox.json.read_int(self.val)
         except JsonError as e:
-            raise DecodeError("JSON int read failed: " + str(e))
+            raise DecodeError("JSON int read failed: " + str(e)) from e
 
     def as_float(self: NoxJsonDocument) -> float:
         try:
+            if self.pos >= 0:
+                return nox.json.pos_number(self.val, self.pos)
             return nox.json.read_float(self.val)
         except JsonError as e:
-            raise DecodeError("JSON float read failed: " + str(e))
+            raise DecodeError("JSON float read failed: " + str(e)) from e
 
     def as_str(self: NoxJsonDocument) -> str:
         try:
+            if self.pos >= 0:
+                return nox.json.pos_str(self.val, self.pos)
             return nox.json.read_str(self.val)
         except JsonError as e:
-            raise DecodeError("JSON string read failed: " + str(e))
+            raise DecodeError("JSON string read failed: " + str(e)) from e
 
     def has(self: NoxJsonDocument, key: str) -> bool:
+        if self.pos >= 0:
+            if nox.json.pos_kind(self.val, self.pos) != 5:
+                return False
+            return nox.json.pos_find(self.val, self.pos, key) >= 0
         if not nox.json.is_object(self.val):
             return False
         try:
@@ -141,29 +177,70 @@ class NoxJsonDocument(JsonDocument):
 
     def get(self: NoxJsonDocument, key: str) -> JsonDocument:
         try:
+            if self.pos >= 0:
+                p: int = nox.json.pos_get(self.val, self.pos, key)
+                return NoxJsonDocument(self.val, p)
             child: JsonValue = nox.json.get(self.val, key)
             return NoxJsonDocument(child)
         except JsonError as e:
-            raise DecodeError("JSON object lookup failed for '" + key + "': " + str(e))
+            raise DecodeError("JSON object lookup failed for '" + key + "': " + str(e)) from e
 
     def get_str(self: NoxJsonDocument, key: str) -> str:
+        if self.pos >= 0:
+            try:
+                p: int = nox.json.pos_get(self.val, self.pos, key)
+                return nox.json.pos_str(self.val, p)
+            except JsonError as e:
+                raise DecodeError("JSON string field '" + key + "' failed: " + str(e)) from e
         return self.get(key).as_str()
 
     def get_int(self: NoxJsonDocument, key: str) -> int:
+        if self.pos >= 0:
+            try:
+                p: int = nox.json.pos_get(self.val, self.pos, key)
+                return nox.json.pos_int(self.val, p)
+            except JsonError as e:
+                raise DecodeError("JSON int field '" + key + "' failed: " + str(e)) from e
         return self.get(key).as_int()
 
     def get_float(self: NoxJsonDocument, key: str) -> float:
+        if self.pos >= 0:
+            try:
+                p: int = nox.json.pos_get(self.val, self.pos, key)
+                return nox.json.pos_number(self.val, p)
+            except JsonError as e:
+                raise DecodeError("JSON float field '" + key + "' failed: " + str(e)) from e
         return self.get(key).as_float()
 
     def get_bool(self: NoxJsonDocument, key: str) -> bool:
+        if self.pos >= 0:
+            try:
+                p: int = nox.json.pos_get(self.val, self.pos, key)
+                return nox.json.pos_bool(self.val, p)
+            except JsonError as e:
+                raise DecodeError("JSON bool field '" + key + "' failed: " + str(e)) from e
         return self.get(key).as_bool()
 
     def array_len(self: NoxJsonDocument) -> int:
+        if self.pos >= 0:
+            if nox.json.pos_kind(self.val, self.pos) != 4:
+                raise DecodeError("Expected JSON array")
+            return nox.json.pos_len(self.val, self.pos)
         if not nox.json.is_array(self.val):
             raise DecodeError("Expected JSON array")
         return nox.json.array_len(self.val)
 
     def array_get(self: NoxJsonDocument, i: int) -> JsonDocument:
+        if self.pos >= 0:
+            if nox.json.pos_kind(self.val, self.pos) != 4:
+                raise DecodeError("Expected JSON array")
+            try:
+                p: int = nox.json.pos_at(self.val, self.pos, i)
+                return NoxJsonDocument(self.val, p)
+            except IndexError as ie:
+                raise DecodeError("JSON array index out of range: " + str(i)) from ie
+            except JsonError as je:
+                raise DecodeError("JSON array access failed: " + str(je)) from je
         if not nox.json.is_array(self.val):
             raise DecodeError("Expected JSON array")
         n: int = nox.json.array_len(self.val)
@@ -175,13 +252,15 @@ class NoxJsonDocument(JsonDocument):
         return NoxJsonDocument(nox.json.array_get(self.val, idx))
 
     def dump(self: NoxJsonDocument) -> str:
+        if self.pos >= 0:
+            return nox.json.pos_dump(self.val, self.pos)
         return nox.json.dump(self.val)
 
     def dump_pretty(self: NoxJsonDocument, indent: int = 2) -> str:
         n: int = indent
         if n < 0:
             n = 0
-        return nox.json.dump_pretty(self.val, n)
+        return nox.json.dump_pretty(self.raw(), n)
 
 class JsonReader:
     def backend(self: JsonReader) -> str:
@@ -208,7 +287,7 @@ class NoxJsonReader(JsonReader):
             v: JsonValue = nox.json.parse(raw)
             return NoxJsonDocument(v)
         except JsonError as e:
-            raise DecodeError("Invalid JSON payload: " + str(e))
+            raise DecodeError("Invalid JSON payload: " + str(e)) from e
 
     def parse_response(self: NoxJsonReader, resp: Response) -> JsonDocument:
         if len(resp.body) == 0:
@@ -217,4 +296,4 @@ class NoxJsonReader(JsonReader):
             v: JsonValue = nox.json.parse(resp.body)
             return NoxJsonDocument(v)
         except JsonError as e:
-            raise DecodeError("Invalid JSON in response from " + sanitize_url(resp.url) + ": " + str(e))
+            raise DecodeError("Invalid JSON in response from " + sanitize_url(resp.url) + ": " + str(e)) from e

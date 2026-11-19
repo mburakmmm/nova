@@ -198,9 +198,15 @@ Source: external audit of v0.7.0.
 
 ---
 
-### ⏳ Phase 7 — Runtime Parity, Production Hardening & 1.0 Candidate (NEXT)
-- **v0.8.0 — Runtime Integration**: Verified IP-pinned connect in `nox.http` (closing DNS-rebinding TOCTOU), multi-value client `Set-Cookie` forwarding, and custom-CA QUIC/HTTP3 protocol integration test.
-- **v0.9.0 — Production Hardening**: Safer default timeout evaluation (`timeout_ms > 0`), fault-injection & soak testing.
+### ✅ Phase 7 — Nox v2.2.38 Parity & Runtime Hardening (v0.8.0 — COMPLETED)
+- [x] **7.1 SSRF DNS Resolution & Verified IP Pinning (`ssrf.nox`, `request.nox`, `transport.nox`, `client.nox`)**: Added `NoxDnsResolver(timeout_ms, doh_url)` (`nox.dns`), IPv4/IPv6 canonicalization (`nox.ip`), `SSRFPolicy.set_pin_resolved_ip()` / `validate_and_pin()`, per-hop `Request.connect_ip`, `Client.set_ca_file()`, and `allow_https_downgrade=False` defaults in `create_safe_client()`. Explicitly rejects `ca_file` / `pin_resolved_ip` on `stream()` and `stream_upload()` (`UnsupportedFeatureError`).
+- [x] **7.2 Per-Client Isolated Connection Pools (`transport.nox`, `client.nox`)**: Added `Client.enable_private_pool()` backed by `nox.http.Pool` (`new_pool`), `Client.connection_pool_scope()` returning `"client"`, `Client.close()`, and `with Client(...) as cli:` context manager.
+- [x] **7.3 Lazy `Iterator[str]` Stream Generators (`stream.nox`)**: Added `StreamResponse.lines()` and `StreamResponse.chunks(chunk_size)` (`yield`) enforcing `max_line_bytes` cleanly on WASM and desktop.
+- [x] **7.4 Zero-Alloc JSON Cursors, `Exception.cause` & `__all__` Hygiene (`json_adapter.nox`, `errors.nox`, `ssrf.nox`, `url.nox`, `headers.nox`, `cookies.nox`, `psl.nox`)**: Upgraded `NoxJsonDocument` to `nox.json.pos_*` cursor traversal, fixed `NovaError` `super().__init__()` + `raise ... from e` error cause preservation, and enforced `__all__` on internal helper modules.
+- [x] **7.5 Integration Matrix, CI & Supply Chain**: Added `multi_set_cookie_test.nox`, `private_pool_test.nox`, `tls_custom_ca_connect_ip_test.nox`, `ssrf_pinning_downgrade_test.nox`, and `stream_generators_and_causes_test.nox` (`46` total tests), bumped CI to `v2.2.38`, and regenerated CycloneDX 1.5 `sbom.cdx.json`.
+
+### ⏳ Phase 8 — Production Soak Hardening & 1.0 Candidate (NEXT)
+- **v0.9.0 — Production Hardening**: Safer default timeout evaluation (`timeout_ms > 0`), custom-CA QUIC HTTP/3 verification once supported by `nox.http`, fault-injection & soak testing.
 - **v1.0.0 — API Freeze**: SemVer guarantees, pool benchmark, security audit sign-off.
 
 ---

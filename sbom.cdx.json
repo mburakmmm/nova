@@ -3,8 +3,8 @@
   "specVersion": "1.5",
   "version": 1,
   "metadata": {
-    "tools": {"components": [{"type": "application", "name": "noxc", "version": "2.1.186"}]},
-    "component": {"type": "application", "bom-ref": "nova", "name": "nova", "properties": [{"name": "nox:native", "value": "true"}, {"name": "nox:bin", "value": "true"}]}
+    "tools": {"components": [{"type": "application", "name": "noxc", "version": "2.2.38"}]},
+    "component": {"type": "application", "bom-ref": "nova", "name": "nova", "properties": [{"name": "nox:native", "value": "false"}, {"name": "nox:bin", "value": "true"}]}
   },
   "components": [],
   "dependencies": [

@@ -133,6 +133,22 @@ class StreamResponse:
             self.line_buf = self.line_buf + part
         return None
 
+    # Lazily yields each line (without \n / \r\n) on demand with bounded chunk memory.
+    def lines(self: StreamResponse) -> Iterator[str]:
+        while True:
+            ln: str | None = self.read_line()
+            if ln is None:
+                break
+            yield ln
+
+    # Lazily yields response chunks of up to `chunk_size` bytes on demand.
+    def chunks(self: StreamResponse, chunk_size: int = 4096) -> Iterator[str]:
+        while True:
+            c: str = self.read_chunk(chunk_size)
+            if len(c) == 0:
+                break
+            yield c
+
     # Lazy, bounded-memory line consumption (SSE, log streams, NDJSON, huge text bodies).
     def for_each_line(self: StreamResponse, handler: LineHandler) -> int:
         count: int = 0
@@ -279,10 +295,10 @@ class UploadStream:
                 ns.write(chunk)
             except HttpTimeoutError as te:
                 self.is_closed = True
-                raise TimeoutError("Upload write timed out for " + self.method + " " + sanitize_url(self.url) + ": " + str(te))
+                raise TimeoutError("Upload write timed out for " + self.method + " " + sanitize_url(self.url) + ": " + str(te)) from te
             except HttpError as e:
                 self.is_closed = True
-                raise TransportError("Upload write failed for " + self.method + " " + sanitize_url(self.url) + ": " + str(e))
+                raise TransportError("Upload write failed for " + self.method + " " + sanitize_url(self.url) + ": " + str(e)) from e
         else:
             self.uploaded_buf = self.uploaded_buf + chunk
         self.bytes_sent = self.bytes_sent + chunk_bytes
@@ -322,10 +338,10 @@ class UploadStream:
                 return self._finalize_stream_response(s_resp)
             except HttpTimeoutError as te:
                 self.close()
-                raise TimeoutError("Upload finish timed out for " + self.method + " " + sanitize_url(self.url) + ": " + str(te))
+                raise TimeoutError("Upload finish timed out for " + self.method + " " + sanitize_url(self.url) + ": " + str(te)) from te
             except HttpError as e:
                 self.close()
-                raise TransportError("Upload finish failed for " + self.method + " " + sanitize_url(self.url) + ": " + str(e))
+                raise TransportError("Upload finish failed for " + self.method + " " + sanitize_url(self.url) + ": " + str(e)) from e
 
         s_mock: StreamResponse = StreamResponse(self.mock_status, self.mock_headers.clone(), self.url, self.method, self.mock_body, None)
         return self._finalize_stream_response(s_mock)

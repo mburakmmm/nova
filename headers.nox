@@ -4,6 +4,13 @@ import errors
 from errors import InvalidHeaderError
 import nox.strings
 
+__all__: list[str] = [
+    "validate_header_entry",
+    "Headers",
+    "response_headers_from_dict",
+    "headers_from_dict",
+]
+
 def _is_rfc_token_char(b: int) -> bool:
     # RFC 7230 §3.2.6: tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
     # DIGIT (0-9)

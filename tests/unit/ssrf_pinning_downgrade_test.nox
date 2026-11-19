@@ -1,0 +1,123 @@
+# tests/unit/ssrf_pinning_downgrade_test.nox — Unit tests for NoxDnsResolver, IP pinning (connect_ip), ca_file propagation, stream guards, and HTTPS->HTTP downgrade defense.
+
+import nox.test
+import ssrf
+from ssrf import SSRFPolicy, NoxDnsResolver, StaticResolver
+import client
+from client import Client, create_safe_client
+import mock_transport
+from mock_transport import MockTransport
+import request
+from request import Request
+import response
+from response import Response
+import stream
+from stream import StreamResponse, UploadStream
+import errors
+from errors import SSRFSecurityError, UnsupportedFeatureError
+
+# 1. NoxDnsResolver resolves localhost and fails cleanly on invalid domain with cause chained
+dns_res: NoxDnsResolver = NoxDnsResolver(500)
+localhost_ips: list[str] = dns_res.resolve("localhost")
+nox.test.assert_true(len(localhost_ips) > 0, "NoxDnsResolver resolves localhost")
+
+dns_err_caught: bool = False
+try:
+    _bad_ips: list[str] = dns_res.resolve("nonexistent-domain-should-fail.invalid")
+except SSRFSecurityError as e:
+    dns_err_caught = True
+    nox.test.assert_true(len(e.cause) > 0, "NoxDnsResolver preserves DnsError cause")
+nox.test.assert_true(dns_err_caught, "NoxDnsResolver raises SSRFSecurityError on DNS failure")
+
+# 2. SSRFPolicy.validate_and_pin canonicalizes numeric IPv4 literals and resolver outputs
+pol_pin: SSRFPolicy = SSRFPolicy()
+pol_pin.set_pin_resolved_ip(True)
+nox.test.assert_eq_str(pol_pin.validate_and_pin("https://1.1.1.1/dns-query"), "1.1.1.1", "public IPv4 literal pinned")
+
+pol_loop: SSRFPolicy = SSRFPolicy(allow_loopback=True)
+pol_loop.set_pin_resolved_ip(True)
+nox.test.assert_eq_str(pol_loop.validate_and_pin("http://2130706433/metrics"), "127.0.0.1", "decimal IPv4 canonicalized to dotted-quad for connect_ip")
+
+# 3. Client propagates pinned connect_ip across redirect hops and propagates ca_file
+sr: StaticResolver = StaticResolver()
+sr.add("api.example.com", ["93.184.216.34", "93.184.216.35"])
+sr.add("cdn.example.net", ["151.101.1.69"])
+
+pol_redir: SSRFPolicy = SSRFPolicy()
+pol_redir.set_resolver(sr)
+pol_redir.set_pin_resolved_ip(True)
+
+mt: MockTransport = MockTransport()
+mt.add_response(302, "", {"Location": "https://cdn.example.net/assets/app.js"})
+mt.add_response(200, "ok-pinned", {"Content-Type": "text/plain"})
+
+cli: Client = Client("https://api.example.com", ssrf_policy=pol_redir, max_redirects=3)
+cli.set_transport(mt)
+cli.set_ca_file("tests/fixtures/tls/test_cert.pem")
+res: Response = cli.get("/start")
+
+nox.test.assert_eq_int(res.status_code, 200, "redirect with pinned IPs succeeds")
+nox.test.assert_eq_int(len(mt.requests), 2, "two requests sent across redirect")
+nox.test.assert_eq_str(mt.requests[0].connect_ip, "93.184.216.34", "first hop pinned to api.example.com IP")
+nox.test.assert_eq_str(mt.requests[1].connect_ip, "151.101.1.69", "redirect hop pinned to cdn.example.net IP")
+nox.test.assert_eq_str(mt.requests[0].ca_file, "tests/fixtures/tls/test_cert.pem", "ca_file propagated to first hop")
+nox.test.assert_eq_str(mt.requests[1].ca_file, "tests/fixtures/tls/test_cert.pem", "ca_file propagated to redirect hop")
+
+# 4. stream() and stream_upload() reject ca_file and pin_resolved_ip explicitly
+stream_pin_err: bool = False
+try:
+    _st: StreamResponse = cli.stream("GET", "/start")
+except UnsupportedFeatureError as ue:
+    stream_pin_err = True
+    nox.test.assert_true(ue.feature == "ca_file" or ue.feature == "connect_ip", "stream rejects unsupported TLS/pin option cleanly")
+nox.test.assert_true(stream_pin_err, "Client.stream rejects ca_file/pin_resolved_ip explicitly")
+
+upload_pin_err: bool = False
+try:
+    _up: UploadStream = cli.stream_upload("POST", "/start")
+except UnsupportedFeatureError as ue2:
+    upload_pin_err = True
+    nox.test.assert_true(ue2.feature == "ca_file" or ue2.feature == "connect_ip", "stream_upload rejects unsupported TLS/pin option cleanly")
+nox.test.assert_true(upload_pin_err, "Client.stream_upload rejects ca_file/pin_resolved_ip explicitly")
+
+# Also verify pin_resolved_ip alone (without ca_file) is rejected on stream()
+cli_pin_only: Client = Client("https://api.example.com", ssrf_policy=pol_redir)
+cli_pin_only.set_transport(mt)
+pin_only_err: bool = False
+try:
+    _st2: StreamResponse = cli_pin_only.stream("GET", "/start")
+except UnsupportedFeatureError as ue3:
+    pin_only_err = True
+    nox.test.assert_eq_str(ue3.feature, "connect_ip", "stream rejects pin_resolved_ip alone")
+nox.test.assert_true(pin_only_err, "stream without ca_file still rejects active pin_resolved_ip")
+
+# 5. create_safe_client blocks HTTPS -> HTTP downgrade redirects by default
+mt_safe: MockTransport = MockTransport()
+mt_safe.add_response(302, "", {"Location": "http://api.example.com/downgraded"})
+
+safe_c: Client = create_safe_client("https://api.example.com", resolver=sr)
+nox.test.assert_true(safe_c.ssrf_policy is not None, "create_safe_client enables SSRFPolicy")
+if safe_c.ssrf_policy is not None:
+    nox.test.assert_true(safe_c.ssrf_policy.pin_resolved_ip, "create_safe_client enables pin_resolved_ip by default")
+nox.test.assert_true(not safe_c.allow_https_downgrade, "create_safe_client disables HTTPS downgrade by default")
+
+safe_c.set_transport(mt_safe)
+downgrade_blocked: bool = False
+try:
+    _r_dg: Response = safe_c.get("/secure")
+except SSRFSecurityError as se:
+    downgrade_blocked = True
+    nox.test.assert_true("downgrade" in se.message, "downgrade error message mentions HTTPS->HTTP downgrade")
+nox.test.assert_true(downgrade_blocked, "create_safe_client blocks HTTPS -> HTTP redirect by default")
+
+# 6. Explicit opt-in allow_https_downgrade=True allows HTTPS -> HTTP redirect
+mt_allow: MockTransport = MockTransport()
+mt_allow.add_response(302, "", {"Location": "http://api.example.com/public"})
+mt_allow.add_response(200, "allowed", {})
+
+safe_allow: Client = create_safe_client("https://api.example.com", resolver=sr, allow_https_downgrade=True)
+safe_allow.set_transport(mt_allow)
+r_allowed: Response = safe_allow.get("/secure")
+nox.test.assert_eq_int(r_allowed.status_code, 200, "allow_https_downgrade=True permits HTTPS -> HTTP redirect")
+
+print("ssrf_pinning_downgrade_test passed")

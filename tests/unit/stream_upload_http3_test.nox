@@ -38,7 +38,7 @@ with cli.stream_upload("POST", "/events", -1, {"mode": "chunked"}, {"X-Batch": "
     body_text = up.uploaded_data()
 
 nox.test.assert_eq_str(body_text, "{\"a\":1}\n{\"b\":2}\n", "mock upload captured full body")
-nox.test.assert_eq_str(mt.requests[0].headers.get("User-Agent"), "Nova/0.7.1", "User-Agent updated to Nova/0.7.1")
+nox.test.assert_eq_str(mt.requests[0].headers.get("User-Agent"), "Nova/0.8.0", "User-Agent updated to Nova/0.8.0")
 nox.test.assert_eq_str(mt.requests[0].headers.get("Authorization"), "Bearer tok_stream_123", "Bearer auth applied to stream_upload")
 nox.test.assert_eq_str(mt.requests[0].url, "https://api.example.com/events?mode=chunked", "query params merged in stream_upload")
 

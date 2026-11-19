@@ -1,0 +1,66 @@
+# tests/integration/private_pool_test.nox — Deterministic local server integration test for isolated per-Client private connection pools (nox.http.Pool).
+
+import nox.http
+from nox.http import HttpRequest, HttpResponse
+import nox.test
+import nox.time
+import client
+from client import Client
+import response
+from response import Response
+
+def pool_handler(req: HttpRequest) -> HttpResponse:
+    if req.target == "/ping":
+        return HttpResponse(200, "pong", {"Content-Type": "text/plain"})
+    if req.target == "/echo":
+        return HttpResponse(200, req.body, {"Content-Type": "text/plain"})
+    return HttpResponse(404, "not found", {})
+
+nox.http.configure(bind_address="127.0.0.1")
+
+async def run_pool_server() -> int:
+    nox.http.serve(18973, pool_handler)
+    return 1
+
+srv_task: Task[int] = spawn run_pool_server()
+nox.time.sleep_ms(120)
+
+c1: Client = Client("http://127.0.0.1:18973")
+c1.enable_private_pool(8, 30000)
+c2: Client = Client("http://127.0.0.1:18973")
+c2.enable_private_pool(4, 30000)
+
+nox.test.assert_eq_str(c1.connection_pool_scope(), "client", "c1 uses client-scoped pool")
+nox.test.assert_eq_str(c2.connection_pool_scope(), "client", "c2 uses client-scoped pool")
+
+# 1. Request through c1 populates c1's idle pool while leaving c2 untouched
+r1: Response = c1.get("/ping")
+nox.test.assert_eq_int(r1.status_code, 200, "c1 first GET status 200")
+nox.test.assert_eq_str(r1.body, "pong", "c1 response body matches")
+nox.test.assert_true(c1.get_idle_connections() >= 1, "c1 has idle pooled connection after response")
+nox.test.assert_eq_int(c2.get_idle_connections(), 0, "c2 isolated pool still has 0 idle connections")
+
+# 2. Reuse c1 connection
+r1b: Response = c1.post("/echo", body="reused-c1")
+nox.test.assert_eq_int(r1b.status_code, 200, "c1 second POST status 200")
+nox.test.assert_eq_str(r1b.body, "reused-c1", "c1 POST echoed cleanly")
+
+# 3. Context-managed private pool client closes cleanly without touching c1
+with Client("http://127.0.0.1:18973") as c3:
+    c3.enable_private_pool(4, 15000)
+    r3: Response = c3.get("/ping")
+    nox.test.assert_eq_int(r3.status_code, 200, "context-managed private pool GET 200")
+    nox.test.assert_true(c3.get_idle_connections() >= 1, "c3 accumulated idle connection")
+
+nox.test.assert_eq_str(c3.connection_pool_scope(), "process", "c3 closed on with exit")
+nox.test.assert_true(c1.get_idle_connections() >= 1, "c1 pool unaffected by c3 close")
+
+c1.close()
+c2.close()
+nox.test.assert_eq_str(c1.connection_pool_scope(), "process", "c1 close clears private pool")
+
+nox.http.shutdown()
+nox.http.clear_bind_address()
+_srv_done: int = await srv_task
+nox.test.assert_eq_int(_srv_done, 1, "local private pool server stopped cleanly")
+print("private_pool_test passed")

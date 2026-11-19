@@ -6,6 +6,12 @@ import nox.url
 from nox.url import URL
 import nox.strings
 
+__all__: list[str] = [
+    "sanitize_url",
+    "normalize_path",
+    "resolve_url",
+]
+
 def sanitize_url(raw_url: str) -> str:
     # Redacts user:password from URL strings for safe error messages and logging
     at_idx: int = nox.strings.index_of(raw_url, "@")

@@ -4,7 +4,7 @@ This document records verified compiler versions, stdlib capabilities, and runti
 
 ## Toolchain Verification
 
-- **Compiler**: `noxc 2.1.186`
+- **Compiler**: `noxc 2.2.38`
 - **Compiler Source**: [https://github.com/mburakmmm/nox-lang](https://github.com/mburakmmm/nox-lang)
 - **Platforms Verified (Full Native + `noxclibs`)**: macOS (Darwin arm64 / Apple Silicon), Linux (Ubuntu x86-64 / arm64), Windows (x86-64)
 - **Pure-Nox Cross-Compilation Targets Verified (`nova.nox` core)**: `wasm32-wasi`, `wasm32-freestanding`, `ios-arm64`, `android-arm64`
@@ -14,9 +14,11 @@ This document records verified compiler versions, stdlib capabilities, and runti
 
 | Module | Verification Status | Used in Nova |
 |---|---|---|
-| `nox.http` | Verified (`get`, `post`, `request`, `stream`, `stream_upload`, `set_http3`, `client_pool`, `HttpStream`) | Core transport via `TransportAdapter` |
+| `nox.http` | Verified (`get`, `post`, `request` with `connect_ip`/`ca_file`, `Pool`/`new_pool`, `stream`, `stream_upload`, `set_http3`, `client_pool`, `HttpStream`, `\n`-joined multi headers) | Core transport via `TransportAdapter` |
+| `nox.dns` | Verified (`resolve`, `DnsError`, `DnsTimeoutError`, WASM DoH `doh_url`) | `NoxDnsResolver` in `ssrf.nox` |
+| `nox.ip` | Verified (`is_valid`, `parse`) | IPv6 canonicalization in `ssrf.nox` |
 | `nox.url` | Verified (`parse`, `query_encode`, `query_decode`, `join`) | URL normalization, query encoding |
-| `nox.json` | Verified (`parse`, `dump`, `dump_pretty`, `JsonValue`, `JsonError`) | Default JSON decoding & WASM/mobile `NoxJsonReader` fallback |
+| `nox.json` | Verified (`parse`, `pos_*` zero-alloc cursor APIs, `dump`, `dump_pretty`, `JsonValue`, `JsonError`) | Default JSON decoding & fast `NoxJsonDocument` fallback |
 | `nox.yyjson` | Verified Desktop-only (`noxclibs.a`) | Optional accelerated `YyJsonReader` (`yyjson_adapter.nox`) |
 | `nox.brotli` | Verified Desktop-only (`noxclibs.a`) | Optional `Content-Encoding: br` decoding (`brotli_codec.nox`) |
 | `nox.base64` | Verified (`encode`, `decode`) | Basic authentication header encoding |

@@ -9,6 +9,8 @@ class Request:
     headers: Headers
     body: str
     timeout_ms: int
+    connect_ip: str
+    ca_file: str
 
     def __init__(
         self: Request,
@@ -16,10 +18,14 @@ class Request:
         url: str,
         headers: Headers,
         body: str = "",
-        timeout_ms: int = 0
+        timeout_ms: int = 0,
+        connect_ip: str = "",
+        ca_file: str = ""
     ) -> None:
         self.method = method
         self.url = url
         self.headers = headers
         self.body = body
         self.timeout_ms = timeout_ms
+        self.connect_ip = connect_ip
+        self.ca_file = ca_file

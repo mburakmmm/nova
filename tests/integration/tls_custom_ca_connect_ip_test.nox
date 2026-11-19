@@ -1,0 +1,107 @@
+# tests/integration/tls_custom_ca_connect_ip_test.nox — Deterministic local TLS server test for custom ca_file verification and verified connect_ip SNI pinning.
+
+import nox.http
+from nox.http import HttpRequest, HttpResponse
+import nox.strings
+import nox.test
+import nox.time
+import client
+from client import Client
+import ssrf
+from ssrf import SSRFPolicy, StaticResolver
+import response
+from response import Response
+import errors
+from errors import TransportError, SSRFSecurityError
+
+def tls_handler(req: HttpRequest) -> HttpResponse:
+    if req.target == "/tls":
+        host_val: str = ""
+        for k in req.headers:
+            if nox.strings.lower(k) == "host":
+                host_val = req.headers[k]
+        return HttpResponse(200, "tls-ok:" + host_val, {"Content-Type": "text/plain"})
+    if req.target == "/tls-echo":
+        return HttpResponse(200, "echo:" + req.body, {"Content-Type": "text/plain"})
+    return HttpResponse(404, "not found", {})
+
+nox.http.configure(bind_address="127.0.0.1")
+
+async def run_tls_server() -> int:
+    nox.http.serve_tls(18974, tls_handler, "tests/fixtures/tls/test_cert.pem", "tests/fixtures/tls/test_key.pem")
+    return 1
+
+srv_task: Task[int] = spawn run_tls_server()
+nox.time.sleep_ms(250)
+
+# Shared loopback policy mapping 'localhost' -> 127.0.0.1 with IP pinning
+sr_ok: StaticResolver = StaticResolver()
+sr_ok.add("localhost", ["127.0.0.1"])
+pol_ok: SSRFPolicy = SSRFPolicy(allow_loopback=True)
+pol_ok.set_resolver(sr_ok)
+pol_ok.set_pin_resolved_ip(True)
+
+# 1. Self-signed TLS server without custom ca_file MUST fail verification
+cli_no_ca: Client = Client("https://localhost:18974", ssrf_policy=pol_ok, timeout_ms=3000)
+no_ca_failed: bool = False
+try:
+    _r_fail: Response = cli_no_ca.get("/tls")
+except TransportError as te:
+    no_ca_failed = True
+nox.test.assert_true(no_ca_failed, "HTTPS request without trusted CA fails TLS verification")
+
+# 2. Custom ca_file + pinned connect_ip succeeds on GET and POST with SNI 'localhost'
+cli_ca: Client = Client("https://localhost:18974", ssrf_policy=pol_ok, timeout_ms=5000)
+cli_ca.set_ca_file("tests/fixtures/tls/test_cert.pem")
+r_tls_get: Response = cli_ca.get("/tls")
+nox.test.assert_eq_int(r_tls_get.status_code, 200, "HTTPS GET with custom ca_file + connect_ip returns 200")
+nox.test.assert_true("tls-ok:" in r_tls_get.body, "TLS handler responded")
+nox.test.assert_true("localhost:18974" in r_tls_get.body, "Host/SNI remained localhost:18974 while connecting to pinned IP")
+
+r_tls_post: Response = cli_ca.post("/tls-echo", body="secure-payload")
+nox.test.assert_eq_int(r_tls_post.status_code, 200, "HTTPS POST with custom ca_file + connect_ip returns 200")
+nox.test.assert_eq_str(r_tls_post.body, "echo:secure-payload", "HTTPS POST body echoed cleanly")
+
+# 3. Direct custom ca_file without connect_ip (plain localhost DNS) also verifies cleanly
+cli_ca_direct: Client = Client("https://localhost:18974", timeout_ms=5000)
+cli_ca_direct.set_ca_file("tests/fixtures/tls/test_cert.pem")
+r_direct: Response = cli_ca_direct.get("/tls")
+nox.test.assert_eq_int(r_direct.status_code, 200, "HTTPS GET with custom ca_file over localhost succeeds")
+
+# 4. SSRF rebinding to private IP stays blocked before socket connect
+sr_rebind: StaticResolver = StaticResolver()
+sr_rebind.add("localhost", ["10.0.0.5"])
+pol_rebind: SSRFPolicy = SSRFPolicy(allow_loopback=True)
+pol_rebind.set_resolver(sr_rebind)
+pol_rebind.set_pin_resolved_ip(True)
+
+cli_rebind: Client = Client("https://localhost:18974", ssrf_policy=pol_rebind, timeout_ms=3000)
+cli_rebind.set_ca_file("tests/fixtures/tls/test_cert.pem")
+rebind_blocked: bool = False
+try:
+    _r_reb: Response = cli_rebind.get("/tls")
+except SSRFSecurityError as se:
+    rebind_blocked = True
+nox.test.assert_true(rebind_blocked, "private IP DNS rebinding blocked before connect_ip")
+
+# 5. Mismatched SAN hostname with connect_ip fails strict TLS hostname verification
+sr_mismatch: StaticResolver = StaticResolver()
+sr_mismatch.add("wronghost.example.test", ["127.0.0.1"])
+pol_mismatch: SSRFPolicy = SSRFPolicy(allow_loopback=True)
+pol_mismatch.set_resolver(sr_mismatch)
+pol_mismatch.set_pin_resolved_ip(True)
+
+cli_mismatch: Client = Client("https://wronghost.example.test:18974", ssrf_policy=pol_mismatch, timeout_ms=3000)
+cli_mismatch.set_ca_file("tests/fixtures/tls/test_cert.pem")
+san_failed: bool = False
+try:
+    _r_mis: Response = cli_mismatch.get("/tls")
+except TransportError as te2:
+    san_failed = True
+nox.test.assert_true(san_failed, "strict TLS hostname verification rejects SAN mismatch even with connect_ip")
+
+nox.http.shutdown()
+nox.http.clear_bind_address()
+_srv_done: int = await srv_task
+nox.test.assert_eq_int(_srv_done, 1, "local TLS server stopped cleanly")
+print("tls_custom_ca_connect_ip_test passed")

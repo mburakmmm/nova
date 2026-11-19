@@ -13,7 +13,7 @@ from cookies import CookieJar, Cookie
 import retry
 from retry import RetryPolicy, parse_retry_after_ms
 import ssrf
-from ssrf import SSRFPolicy, HostResolver, StaticResolver, IPAddress, parse_ip, classify_ip
+from ssrf import SSRFPolicy, HostResolver, NoxDnsResolver, StaticResolver, IPAddress, parse_ip, classify_ip
 import stream
 from stream import StreamResponse, UploadStream, LineHandler, ChunkHandler
 import codec
@@ -205,6 +205,9 @@ def safe_client(
     max_redirects: int = 3,
     ssrf_policy: SSRFPolicy | None = None,
     resolver: HostResolver | None = None,
-    require_dns_or_allowlist: bool = False
+    require_dns_or_allowlist: bool = False,
+    use_system_dns: bool = True,
+    pin_dns: bool = True,
+    allow_https_downgrade: bool = False
 ) -> Client:
-    return create_safe_client(base_url, timeout_ms, max_redirects, ssrf_policy, resolver, require_dns_or_allowlist)
+    return create_safe_client(base_url, timeout_ms, max_redirects, ssrf_policy, resolver, require_dns_or_allowlist, use_system_dns, pin_dns, allow_https_downgrade)

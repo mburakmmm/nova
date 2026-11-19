@@ -25,11 +25,11 @@ from codec import ContentDecoder, decode_response_with
 import multipart
 from multipart import MultipartEncoder, MultipartFile, file_from_path
 import ssrf
-from ssrf import SSRFPolicy, HostResolver
+from ssrf import SSRFPolicy, HostResolver, NoxDnsResolver
 import stream
 from stream import StreamResponse, UploadStream
 import errors
-from errors import RetryExhaustedError, TransportError, UnsupportedFeatureError
+from errors import RetryExhaustedError, TransportError, UnsupportedFeatureError, SSRFSecurityError
 import nox.strings
 import nox.url
 from nox.url import URL
@@ -72,6 +72,9 @@ class Client:
     transport: Transport
     content_decoder: ContentDecoder | None
     advertise_decoder_encoding: bool
+    ca_file: str
+    allow_https_downgrade: bool
+    owns_private_pool: bool
 
     def __init__(
         self: Client,
@@ -83,7 +86,7 @@ class Client:
     ) -> None:
         self.base_url = base_url
         self.default_headers = Headers()
-        self.default_headers.set("User-Agent", "Nova/0.7.1")
+        self.default_headers.set("User-Agent", "Nova/0.8.0")
         self.default_headers.set("Accept", "*/*")
         self.basic_auth = None
         self.bearer_auth = None
@@ -96,21 +99,51 @@ class Client:
         self.transport = TransportAdapter()
         self.content_decoder = None
         self.advertise_decoder_encoding = False
+        self.ca_file = ""
+        self.allow_https_downgrade = True
+        self.owns_private_pool = False
 
-    # SCOPE: the Nox runtime pool is PROCESS-WIDE (nox.http.client_pool). Calling this on any
-    # Client reconfigures the pool for EVERY Client / request in the process; connections are
-    # keyed per origin by the runtime, never shared across different hosts. A per-Client pool
-    # is not possible without runtime support (NOX_LIMITATIONS.md §17).
+    # SCOPE: configures the PROCESS-WIDE runtime pool (`nox.http.client_pool`).
+    # Use `enable_private_pool()` for an isolated per-Client `nox.http.Pool` instead.
     def set_connection_pool(self: Client, max_idle: int = 32, idle_timeout_ms: int = 90000) -> Client:
         client_pool(max_idle, idle_timeout_ms)
         return self
 
-    # Idle connections in the PROCESS-WIDE pool (not just this Client's).
+    # Dedicated per-Client isolated `nox.http.Pool` (v2.2.1): never shares connections with
+    # other Clients or the process-wide pool. Close explicitly or use `with Client() as cli:`.
+    def enable_private_pool(self: Client, max_idle: int = 32, idle_timeout_ms: int = 90000) -> Client:
+        self.transport.configure_private_pool(max_idle, idle_timeout_ms)
+        self.owns_private_pool = True
+        return self
+
     def get_idle_connections(self: Client) -> int:
+        if self.owns_private_pool:
+            return self.transport.idle_connections()
         return client_idle_connections()
 
     def connection_pool_scope(self: Client) -> str:
+        if self.owns_private_pool:
+            return self.transport.pool_scope()
         return CONNECTION_POOL_SCOPE
+
+    # Custom PEM CA file for verified private/local TLS testing (`nox.http.request(..., ca_file=...)`).
+    def set_ca_file(self: Client, ca_path: str) -> Client:
+        self.ca_file = ca_path
+        return self
+
+    def set_allow_https_downgrade(self: Client, allow: bool = True) -> Client:
+        self.allow_https_downgrade = allow
+        return self
+
+    def close(self: Client) -> None:
+        self.transport.close()
+        self.owns_private_pool = False
+
+    def __enter__(self: Client) -> Client:
+        return self
+
+    def __exit__(self: Client) -> None:
+        self.close()
 
     def set_ssrf_policy(self: Client, policy: SSRFPolicy) -> Client:
         self.ssrf_policy = policy
@@ -211,7 +244,7 @@ class Client:
         if timeout_ms >= 0:
             eff_timeout = timeout_ms
 
-        return Request(method, full_url, req_headers, payload, eff_timeout)
+        return Request(method, full_url, req_headers, payload, eff_timeout, "", self.ca_file)
 
     def _compute_retry_delay_ms(self: Client, pol: RetryPolicy, attempt: int, resp_headers: Headers) -> int:
         delay: int = pol.next_delay_ms(attempt)
@@ -236,9 +269,12 @@ class Client:
         loc: str = resp_headers.get("Location")
         next_url: str = resolve_url(current_req.url, loc)
 
-        # Validate SSRF defense policy on redirect target (prevents open-redirect SSRF bypasses)
-        if s_pol is not None:
-            s_pol.validate_target(next_url)
+        # Reject HTTPS -> HTTP scheme downgrades when disallowed (create_safe_client / allow_https_downgrade=False).
+        if not self.allow_https_downgrade:
+            cur_scheme: str = nox.strings.lower(nox.url.parse(current_req.url).scheme)
+            next_scheme: str = nox.strings.lower(nox.url.parse(next_url).scheme)
+            if cur_scheme == "https" and next_scheme == "http":
+                raise SSRFSecurityError(next_url, nox.url.parse(next_url).host, "Blocked insecure HTTPS-to-HTTP redirect downgrade")
 
         same_origin: bool = is_same_origin(current_req.url, next_url)
         next_headers: Headers = current_req.headers.clone()
@@ -264,14 +300,10 @@ class Client:
             next_headers.delete("Cookie")
             jar2.apply_to_request(next_url, next_headers)
 
-        return Request(next_method, next_url, next_headers, next_body, current_req.timeout_ms)
+        return Request(next_method, next_url, next_headers, next_body, current_req.timeout_ms, "", current_req.ca_file)
 
     def send(self: Client, req: Request) -> Response:
-        # Validate SSRF defense policy on initial request target
         s_pol: SSRFPolicy | None = self.ssrf_policy
-        if s_pol is not None:
-            s_pol.validate_target(req.url)
-
         pol: RetryPolicy | None = self.retry_policy
         current_req: Request = req
         redirect_count: int = 0
@@ -279,6 +311,12 @@ class Client:
         last_error_msg: str = ""
 
         while True:
+            # Validate SSRF policy (initial target + every redirect hop) and apply verified IP pinning when enabled.
+            if s_pol is not None:
+                pinned: str = s_pol.validate_and_pin(current_req.url)
+                if len(pinned) > 0:
+                    current_req = Request(current_req.method, current_req.url, current_req.headers, current_req.body, current_req.timeout_ms, pinned, current_req.ca_file)
+
             res: Response | None = None
 
             while True:
@@ -466,8 +504,10 @@ class Client:
         current_req: Request = self._prepare_request(method, url, body, "", params, headers, timeout_ms)
 
         s_pol: SSRFPolicy | None = self.ssrf_policy
-        if s_pol is not None:
-            s_pol.validate_target(current_req.url)
+        if len(self.ca_file) > 0:
+            raise UnsupportedFeatureError("ca_file", "Custom CA file is not supported for stream() in Nox 2.2.38 runtime; use request/get/post")
+        if s_pol is not None and s_pol.pin_resolved_ip:
+            raise UnsupportedFeatureError("connect_ip", "Verified IP pinning is not supported for stream() in Nox 2.2.38 runtime; use request/get/post")
 
         pol: RetryPolicy | None = self.retry_policy
         redirect_count: int = 0
@@ -475,6 +515,8 @@ class Client:
         last_error_msg: str = ""
 
         while True:
+            if s_pol is not None:
+                s_pol.validate_target(current_req.url)
             opened: StreamResponse | None = None
 
             while True:
@@ -546,6 +588,10 @@ class Client:
         req: Request = self._prepare_request(method, url, "", "", params, headers, timeout_ms)
 
         s_pol: SSRFPolicy | None = self.ssrf_policy
+        if len(self.ca_file) > 0:
+            raise UnsupportedFeatureError("ca_file", "Custom CA file is not supported for stream_upload() in Nox 2.2.38 runtime; use request/post")
+        if s_pol is not None and s_pol.pin_resolved_ip:
+            raise UnsupportedFeatureError("connect_ip", "Verified IP pinning is not supported for stream_upload() in Nox 2.2.38 runtime; use request/post")
         if s_pol is not None:
             s_pol.validate_target(req.url)
 
@@ -556,24 +602,31 @@ class Client:
         return up
 
 # Factory for pre-hardened, defense-in-depth clients (e.g. for fetching user-supplied URLs).
-# Enables default SSRF blocking, sets 15s timeout, limits redirects to 3, and enables raise_for_status.
-# If `resolver` is supplied, it is attached to the SSRFPolicy to validate all resolved IP addresses.
-# Pass `require_dns_or_allowlist=True` to reject unverified public hostnames when no resolver is configured.
+# Enables default SSRF blocking, sets 15s timeout, limits redirects to 3, enables raise_for_status,
+# attaches `NoxDnsResolver` + verified IP pinning (`connect_ip`) by default, and blocks HTTPS->HTTP
+# downgrade redirects unless explicitly permitted.
 def create_safe_client(
     base_url: str = "",
     timeout_ms: int = 15000,
     max_redirects: int = 3,
     ssrf_policy: SSRFPolicy | None = None,
     resolver: HostResolver | None = None,
-    require_dns_or_allowlist: bool = False
+    require_dns_or_allowlist: bool = False,
+    use_system_dns: bool = True,
+    pin_dns: bool = True,
+    allow_https_downgrade: bool = False
 ) -> Client:
     p: SSRFPolicy = SSRFPolicy()
     if ssrf_policy is not None:
         p = ssrf_policy
     if resolver is not None:
         p.set_resolver(resolver)
+    elif ssrf_policy is None and not require_dns_or_allowlist and use_system_dns:
+        p.set_resolver(NoxDnsResolver(timeout_ms))
     if require_dns_or_allowlist:
         p.set_require_dns_or_allowlist(True)
+    if ssrf_policy is None and pin_dns:
+        p.set_pin_resolved_ip(True)
     c: Client = Client(
         base_url=base_url,
         raise_for_status=True,
@@ -581,4 +634,5 @@ def create_safe_client(
         timeout_ms=timeout_ms,
         ssrf_policy=p
     )
+    c.set_allow_https_downgrade(allow_https_downgrade)
     return c

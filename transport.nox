@@ -1,7 +1,7 @@
 # transport.nox — Transport adapter wrapping nox.http stdlib interface.
 
 import nox.http
-from nox.http import HttpResponse, HttpError, HttpTimeoutError, HttpStream
+from nox.http import HttpResponse, HttpError, HttpTimeoutError, HttpStream, Pool, new_pool
 import nox.time
 import request
 from request import Request
@@ -33,9 +33,51 @@ class Transport:
     def stream_upload(self: Transport, req: Request, content_length: int = -1) -> UploadStream:
         raise UnsupportedFeatureError(req.method, "Transport.stream_upload is not implemented")
 
-class TransportAdapter(Transport):
-    def __init__(self: TransportAdapter) -> None:
+    def configure_private_pool(self: Transport, max_idle: int = 32, idle_timeout_ms: int = 90000) -> None:
+        raise UnsupportedFeatureError("pool", "Per-Client private Pool is not supported by this Transport")
+
+    def idle_connections(self: Transport) -> int:
+        return nox.http.client_idle_connections()
+
+    def pool_scope(self: Transport) -> str:
+        return "process"
+
+    def close(self: Transport) -> None:
         pass
+
+class TransportAdapter(Transport):
+    private_pool: Pool | None
+
+    def __init__(self: TransportAdapter) -> None:
+        self.private_pool = None
+
+    def configure_private_pool(self: TransportAdapter, max_idle: int = 32, idle_timeout_ms: int = 90000) -> None:
+        if self.private_pool is not None:
+            self.private_pool.close()
+        self.private_pool = new_pool(max_idle, idle_timeout_ms)
+
+    def idle_connections(self: TransportAdapter) -> int:
+        if self.private_pool is not None:
+            return self.private_pool.idle_connections()
+        return nox.http.client_idle_connections()
+
+    def pool_scope(self: TransportAdapter) -> str:
+        if self.private_pool is not None:
+            return "client"
+        return "process"
+
+    def close(self: TransportAdapter) -> None:
+        if self.private_pool is not None:
+            self.private_pool.close()
+            self.private_pool = None
+
+    def _dispatch_request(self: TransportAdapter, method: str, target_url: str, req: Request, raw_headers: dict[str, str]) -> HttpResponse:
+        if len(req.connect_ip) > 0 or len(req.ca_file) > 0:
+            # Verified IP pinning & custom CA intentionally bypass connection pools per Nox http spec.
+            return nox.http.request(method, target_url, req.body, raw_headers, req.timeout_ms, req.connect_ip, req.ca_file)
+        if self.private_pool is not None:
+            return self.private_pool.request(method, target_url, req.body, raw_headers, req.timeout_ms)
+        return nox.http.request(method, target_url, req.body, raw_headers, req.timeout_ms)
 
     def execute(self: TransportAdapter, req: Request) -> Response:
         method: str = req.method
@@ -45,21 +87,28 @@ class TransportAdapter(Transport):
         if method == "GET" or method == "POST" or method == "PUT" or method == "PATCH" or method == "DELETE" or method == "HEAD" or method == "OPTIONS":
             start_ms: int = nox.time.now_ms()
             try:
-                res: HttpResponse = nox.http.request(method, target_url, req.body, raw_headers, req.timeout_ms)
+                res: HttpResponse = self._dispatch_request(method, target_url, req, raw_headers)
                 elapsed: int = nox.time.now_ms() - start_ms
                 resp_headers: Headers = response_headers_from_dict(res.headers)
                 return Response(res.status, res.body, resp_headers, target_url, method, elapsed)
             except HttpTimeoutError as te:
-                raise TimeoutError("Request timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te))
+                raise TimeoutError("Request timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te)) from te
             except HttpError as e:
-                raise TransportError(method + " request failed for " + sanitize_url(target_url) + ": " + str(e))
+                raise TransportError(method + " request failed for " + sanitize_url(target_url) + ": " + str(e)) from e
 
         raise UnsupportedFeatureError(method, "Unrecognized HTTP method: " + method)
+
+    def _guard_stream_options(self: TransportAdapter, req: Request, op_name: str) -> None:
+        if len(req.connect_ip) > 0:
+            raise UnsupportedFeatureError("connect_ip", "Verified IP pinning (connect_ip) is not supported for " + op_name + " in Nox 2.2.38 runtime; use buffered request/get/post")
+        if len(req.ca_file) > 0:
+            raise UnsupportedFeatureError("ca_file", "Custom CA file (ca_file) is not supported for " + op_name + " in Nox 2.2.38 runtime; use buffered request/get/post")
 
     def stream(self: TransportAdapter, req: Request) -> StreamResponse:
         method: str = req.method
         target_url: str = req.url
         raw_headers: dict[str, str] = req.headers.to_dict()
+        self._guard_stream_options(req, "stream()")
 
         if method == "GET" or method == "POST" or method == "PUT" or method == "PATCH" or method == "DELETE" or method == "HEAD" or method == "OPTIONS":
             try:
@@ -70,9 +119,9 @@ class TransportAdapter(Transport):
                 resp_headers: Headers = response_headers_from_dict(s.headers)
                 return StreamResponse(s.status, resp_headers, target_url, method, "", s)
             except HttpTimeoutError as te:
-                raise TimeoutError("Stream request timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te))
+                raise TimeoutError("Stream request timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te)) from te
             except HttpError as e:
-                raise TransportError(method + " stream failed for " + sanitize_url(target_url) + ": " + str(e))
+                raise TransportError(method + " stream failed for " + sanitize_url(target_url) + ": " + str(e)) from e
 
         raise UnsupportedFeatureError(method, "Unrecognized HTTP method: " + method)
 
@@ -80,6 +129,7 @@ class TransportAdapter(Transport):
         method: str = req.method
         target_url: str = req.url
         raw_headers: dict[str, str] = req.headers.to_dict()
+        self._guard_stream_options(req, "stream_upload()")
 
         if content_length < -1:
             raise EncodeError("content_length must be -1 (chunked) or >= 0")
@@ -92,8 +142,8 @@ class TransportAdapter(Transport):
                 s: HttpStream = nox.http.stream_upload(method, target_url, raw_headers, content_length, t_ms)
                 return UploadStream(target_url, method, content_length, s)
             except HttpTimeoutError as te:
-                raise TimeoutError("Upload stream open timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te))
+                raise TimeoutError("Upload stream open timed out after " + str(req.timeout_ms) + " ms for " + method + " " + sanitize_url(target_url) + ": " + str(te)) from te
             except HttpError as e:
-                raise TransportError(method + " stream_upload failed for " + sanitize_url(target_url) + ": " + str(e))
+                raise TransportError(method + " stream_upload failed for " + sanitize_url(target_url) + ": " + str(e)) from e
 
         raise UnsupportedFeatureError(method, "Streaming upload requires POST, PUT, or PATCH; got: " + method)

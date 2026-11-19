@@ -13,6 +13,11 @@ from httpdate import parse_http_date
 import psl
 from psl import is_public_suffix, is_public_suffix_with_extras
 
+__all__: list[str] = [
+    "Cookie",
+    "CookieJar",
+]
+
 def _validate_cookie_token(token: str) -> None:
     i: int = 0
     n: int = len(token)

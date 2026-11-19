@@ -1,0 +1,56 @@
+# tests/integration/multi_set_cookie_test.nox — Deterministic local server test for multi Set-Cookie via nox.http.multi().
+
+import nox.http
+from nox.http import HttpRequest, HttpResponse
+import nox.strings
+import nox.test
+import nox.time
+import client
+from client import Client
+import response
+from response import Response
+
+def cookie_handler(req: HttpRequest) -> HttpResponse:
+    if req.target == "/login":
+        sc: str = nox.http.multi([
+            "sid=alpha42; Path=/; HttpOnly",
+            "csrf=token99; Path=/",
+        ])
+        return HttpResponse(200, "logged-in", {"Content-Type": "text/plain", "Set-Cookie": sc})
+    if req.target == "/whoami":
+        cookie_hdr: str = ""
+        for k in req.headers:
+            if nox.strings.lower(k) == "cookie":
+                cookie_hdr = req.headers[k]
+        return HttpResponse(200, cookie_hdr, {"Content-Type": "text/plain"})
+    return HttpResponse(404, "not found", {})
+
+nox.http.configure(bind_address="127.0.0.1")
+
+async def run_cookie_server() -> int:
+    nox.http.serve(18972, cookie_handler)
+    return 1
+
+srv_task: Task[int] = spawn run_cookie_server()
+nox.time.sleep_ms(120)
+
+cli: Client = Client("http://127.0.0.1:18972")
+cli.enable_cookies()
+
+# 1. Server returns two distinct Set-Cookie headers joined via \n by Nox client
+r_login: Response = cli.get("/login")
+nox.test.assert_eq_int(r_login.status_code, 200, "login returns 200")
+sc_list: list[str] = r_login.headers.get_all("Set-Cookie")
+nox.test.assert_eq_int(len(sc_list), 2, "response headers.get_all returns both Set-Cookie values without comma corruption")
+
+# 2. Subsequent request sends both stored cookies back to server
+r_me: Response = cli.get("/whoami")
+nox.test.assert_eq_int(r_me.status_code, 200, "whoami returns 200")
+nox.test.assert_true("sid=alpha42" in r_me.body, "server received first cookie sid=alpha42")
+nox.test.assert_true("csrf=token99" in r_me.body, "server received second cookie csrf=token99")
+
+nox.http.shutdown()
+nox.http.clear_bind_address()
+_srv_done: int = await srv_task
+nox.test.assert_eq_int(_srv_done, 1, "local multi Set-Cookie server stopped cleanly")
+print("multi_set_cookie_test passed")

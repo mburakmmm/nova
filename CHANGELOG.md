@@ -5,6 +5,26 @@ All notable changes to **Nova** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-11-19
+
+### Added & Hardened — Nox v2.2.38 Parity (Pure-Nox WASM/Mobile Compatible)
+- **SSRF DNS Pinning & Custom CA TLS (`ssrf.nox`, `request.nox`, `transport.nox`, `client.nox`, `nova.nox`)**:
+  - Added `NoxDnsResolver(timeout_ms=3000, doh_url="")` backed by `nox.dns.resolve` (system DNS on desktop/mobile; explicit DoH on WASM).
+  - Added `SSRFPolicy.set_pin_resolved_ip()` and `validate_and_pin()`, plus `Request.connect_ip` and `Request.ca_file` propagation across initial requests and every redirect hop (`nox.http.request(..., connect_ip=..., ca_file=...)`).
+  - Added `Client.set_ca_file(ca_path)` for strict PEM CA verification on buffered HTTP/HTTPS requests (no insecure TLS opt-out), and explicit `UnsupportedFeatureError` guards when `ca_file` or `pin_resolved_ip` is used with `stream()` or `stream_upload()`.
+  - Updated `create_safe_client()` / `nova.safe_client()` to enable `NoxDnsResolver`, `pin_resolved_ip=True`, and `allow_https_downgrade=False` (blocking `https -> http` redirect downgrades with `SSRFSecurityError`) by default.
+- **Per-Client Isolated Connection Pools (`transport.nox`, `client.nox`)**:
+  - Added `Client.enable_private_pool(max_idle=32, idle_timeout_ms=90000)` backed by `nox.http.Pool` (`new_pool`), per-client `connection_pool_scope() -> "client"`, `Client.close()`, and `with Client(...) as cli:` context manager cleanup.
+- **Lazy `Iterator[str]` Stream Generators (`stream.nox`)**:
+  - Added genuine lazy `StreamResponse.lines() -> Iterator[str]` and `StreamResponse.chunks(chunk_size=4096) -> Iterator[str]` generator methods using `yield` while preserving `max_line_bytes` enforcement and `wasm32-wasi` compatibility.
+- **Zero-Alloc JSON Cursors & Error Cause Preservation (`json_adapter.nox`, `errors.nox`, `brotli_codec.nox`, `yyjson_adapter.nox`, `stream.nox`, `transport.nox`)**:
+  - Upgraded `NoxJsonDocument` to traverse documents using `nox.json.pos_*` cursor primitives when backed by parsed payloads.
+  - Fixed `NovaError` hierarchy in `errors.nox` to invoke `super().__init__(message)` without shadowing `Exception.message`, and chained root causes via `raise ... from e` (`Exception.cause`) across transport, DNS, JSON, Brotli, and stream errors.
+- **Compile-Time `__all__` API Hygiene**: Added explicit `__all__` export lists to `ssrf.nox`, `url.nox`, `headers.nox`, `cookies.nox`, and `psl.nox` hiding internal `_` helpers.
+- **Tests, Supply Chain & CI**:
+  - Added 5 new test suites (`ssrf_pinning_downgrade_test.nox`, `stream_generators_and_causes_test.nox`, `multi_set_cookie_test.nox`, `private_pool_test.nox`, `tls_custom_ca_connect_ip_test.nox` with deterministic local TLS fixture) bringing total tests to `46 passed, 0 failed`.
+  - Updated `.github/workflows/ci.yml` to `NOX_VERSION: v2.2.38`, bumped `User-Agent` to `Nova/0.8.0` and `nox.json` to `0.8.0`, and regenerated `sbom.cdx.json` with `noxc 2.2.38`.
+
 ## [0.7.1] - 2026-11-16
 
 ### Security & Correctness Hardening (external audit of v0.7.0)

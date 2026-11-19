@@ -23,7 +23,7 @@ jobs:
       - name: Install Nox (Unix)
         if: runner.os != 'Windows'
         env:
-          NOX_VERSION: v2.1.186
+          NOX_VERSION: v2.2.38
         run: |
           curl -fsSL https://noxlang.com/install.sh | bash
           echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
@@ -32,7 +32,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          NOX_VERSION: v2.1.186
+          NOX_VERSION: v2.2.38
         run: |
           $ErrorActionPreference = "Stop"
           irm "https://raw.githubusercontent.com/mburakmmm/nox-lang/$env:NOX_VERSION/install.ps1" | iex
